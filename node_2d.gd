@@ -33,9 +33,13 @@ var box_scene = preload("res://box.tscn")
 func _ready() -> void:  
 	await get_tree().physics_frame
 	randomize()
+	#var box = box_scene.instantiate()
+	#box.global_position = Vector2(552, 232)
+	#add_child(box)
+	#print("box spawned at", box.global_position)
 	var layout = [
-		[1,1,1,1,1,1,1],
-		[1,0,0,0,0,2,1],
+		[0,1,1,1,1,1,1],
+		[0,0,0,0,0,2,1],
 		[1,0,1,0,1,0,1],
 		[1,0,0,0,1,0,1],
 		[1,1,1,0,1,0,1],
@@ -59,18 +63,13 @@ func _ready() -> void:
 					tile_map.set_cell(0, tile_coords, source_id, atlas_coords)
 				2:
 					atlas_coords = goal_tile
-					goal_tiles+=1
 					tile_map.set_cell(0, tile_coords, source_id, atlas_coords)
+					spawn_box(tile_coords)
+					print(tile_coords)
 			#tile_map.set_cell(0, tile_coords, source_id, atlas_coords)
 		grid.append(row)
 	
-	for y in range(height):
-		for x in range(width):
-			match layout[y][x]:
-				0:
-					if randf() < 0.20 and nr_of_boxes < goal_tiles:
-						spawn_box(grid[y][x])
-						nr_of_boxes += 1
+
 # Called every frame. 'delta' is the elapsed time since the previous frame.
 func _process(delta: float) -> void:
 	pass
@@ -80,15 +79,8 @@ func grid_to_world(x,y):
 
 func spawn_box(pos: Vector2i):
 	var box = box_scene.instantiate()
-
-	# get the correct world position for this tile
-	var world_pos = tile_map.to_global(
-		tile_map.map_to_local(pos)
-	)
-	
-
-	box.global_position = world_pos
+	var local_pos = tile_map.map_to_local(pos)
+	box.global_position = tile_map.to_global(local_pos)
+	add_child(box)
 	box.move_back.connect(player._on_box_move_back)
 	print("spawned box, position =", box.position)
-	
-	add_child(box)

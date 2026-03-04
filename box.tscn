@@ -7,11 +7,12 @@
 size = Vector2(16, 16)
 
 [node name="Box" type="Node2D" unique_id=649925781]
-z_index = 1
+z_index = 3
 position = Vector2(0, 1)
 script = ExtResource("1_oq5cr")
 
 [node name="Sprite2D" type="Sprite2D" parent="." unique_id=747783261]
+z_index = 5
 position = Vector2(568, 312)
 scale = Vector2(0.69121873, 0.7200196)
 texture = ExtResource("1_g2tbl")
