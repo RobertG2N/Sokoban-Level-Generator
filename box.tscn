@@ -1,0 +1,83 @@
+[gd_scene format=3 uid="uid://cftwbhv6jeqbr"]
+
+[ext_resource type="Texture2D" uid="uid://c5nnuua36d4xk" path="res://2D Pixel Dungeon Asset Pack/Dungeon_Tileset_at.png" id="1_g2tbl"]
+[ext_resource type="Script" uid="uid://gl3rcjr4bbn6" path="res://box.gd" id="1_oq5cr"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_bqn3j"]
+size = Vector2(16, 16)
+
+[node name="Box" type="Node2D" unique_id=649925781]
+z_index = 1
+position = Vector2(0, 1)
+script = ExtResource("1_oq5cr")
+
+[node name="Sprite2D" type="Sprite2D" parent="." unique_id=747783261]
+position = Vector2(568, 312)
+scale = Vector2(0.69121873, 0.7200196)
+texture = ExtResource("1_g2tbl")
+region_enabled = true
+region_rect = Rect2(72, 464, 16, 16)
+
+[node name="boxUp" type="RayCast2D" parent="." unique_id=562224157]
+position = Vector2(568, 311)
+scale = Vector2(0.24000001, 1)
+target_position = Vector2(0, -9)
+collision_mask = 2
+hit_from_inside = true
+collide_with_areas = true
+
+[node name="boxUp2" type="RayCast2D" parent="." unique_id=384372056]
+position = Vector2(568, 311)
+target_position = Vector2(0, -16)
+collision_mask = 5
+collide_with_areas = true
+
+[node name="boxDown" type="RayCast2D" parent="." unique_id=725264285]
+position = Vector2(568, 311)
+scale = Vector2(0.24007815, 1)
+target_position = Vector2(0, 9)
+collision_mask = 2
+hit_from_inside = true
+collide_with_areas = true
+
+[node name="boxDown2" type="RayCast2D" parent="." unique_id=668701677]
+position = Vector2(568, 311)
+target_position = Vector2(0, 16)
+collision_mask = 5
+collide_with_areas = true
+
+[node name="boxLeft" type="RayCast2D" parent="." unique_id=259026003]
+position = Vector2(568, 311)
+scale = Vector2(0.9199609, 0.27996093)
+target_position = Vector2(-9.78302, 0)
+collision_mask = 2
+hit_from_inside = true
+collide_with_areas = true
+
+[node name="boxLeft2" type="RayCast2D" parent="." unique_id=537738557]
+position = Vector2(568, 311)
+target_position = Vector2(-16, 0)
+collision_mask = 5
+collide_with_areas = true
+
+[node name="boxRight" type="RayCast2D" parent="." unique_id=851627630]
+position = Vector2(568, 311)
+scale = Vector2(1, 0.24000001)
+target_position = Vector2(9, 0)
+collision_mask = 2
+hit_from_inside = true
+collide_with_areas = true
+
+[node name="boxRight2" type="RayCast2D" parent="." unique_id=1259291312]
+position = Vector2(568, 311)
+target_position = Vector2(16, 0)
+collision_mask = 5
+collide_with_areas = true
+
+[node name="StaticBody2D" type="StaticBody2D" parent="." unique_id=1966286534]
+collision_layer = 4
+collision_mask = 4
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="StaticBody2D" unique_id=925252479]
+position = Vector2(568, 311)
+shape = SubResource("RectangleShape2D_bqn3j")

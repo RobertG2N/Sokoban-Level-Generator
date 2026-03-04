@@ -1,0 +1,53 @@
+[gd_scene format=3 uid="uid://b6vfn63n64iid"]
+
+[ext_resource type="Script" uid="uid://c7rhnyit6djl2" path="res://player.gd" id="1_onrkg"]
+[ext_resource type="Texture2D" uid="uid://bkggvea36jiwm" path="res://2D Pixel Dungeon Asset Pack/Dungeon_Character_at.png" id="2_i3pqv"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_onrkg"]
+radius = 2.0
+
+[node name="Player" type="Node2D" unique_id=25050274]
+script = ExtResource("1_onrkg")
+
+[node name="Down" type="RayCast2D" parent="." unique_id=1893311196]
+position = Vector2(344, 240)
+target_position = Vector2(0, 16)
+
+[node name="Left" type="RayCast2D" parent="." unique_id=2021439052]
+position = Vector2(344, 240)
+target_position = Vector2(-16, 0)
+
+[node name="Up" type="RayCast2D" parent="." unique_id=1061238977]
+position = Vector2(344, 240)
+target_position = Vector2(0, -16)
+
+[node name="Right" type="RayCast2D" parent="." unique_id=441083206]
+position = Vector2(344, 240)
+target_position = Vector2(16, 0)
+
+[node name="Sprite2D" type="Sprite2D" parent="." unique_id=1291322542]
+position = Vector2(344, 240)
+scale = Vector2(0.24999985, 0.2499999)
+texture = ExtResource("2_i3pqv")
+region_enabled = true
+region_rect = Rect2(224, 128, 64, 64)
+
+[node name="StaticBody2D" type="StaticBody2D" parent="." unique_id=652400836]
+collision_layer = 2
+collision_mask = 2
+
+[node name="UpCollider" type="CollisionShape2D" parent="StaticBody2D" unique_id=1003485414]
+position = Vector2(344, 234)
+shape = SubResource("CircleShape2D_onrkg")
+
+[node name="DownCollider" type="CollisionShape2D" parent="StaticBody2D" unique_id=1624111808]
+position = Vector2(344, 246)
+shape = SubResource("CircleShape2D_onrkg")
+
+[node name="LeftCollider" type="CollisionShape2D" parent="StaticBody2D" unique_id=339534158]
+position = Vector2(338, 240)
+shape = SubResource("CircleShape2D_onrkg")
+
+[node name="RightCollider" type="CollisionShape2D" parent="StaticBody2D" unique_id=950760003]
+position = Vector2(350, 240)
+shape = SubResource("CircleShape2D_onrkg")
