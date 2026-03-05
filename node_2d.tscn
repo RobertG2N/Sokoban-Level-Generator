@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://fiodtdfy6j71" path="res://node_2d.gd" id="1_0hol4"]
 [ext_resource type="Texture2D" uid="uid://b1tvmaumpnc5u" path="res://2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Tileset.png" id="1_wtcfe"]
 [ext_resource type="PackedScene" uid="uid://b6vfn63n64iid" path="res://player.tscn" id="2_epypp"]
+[ext_resource type="PackedScene" uid="uid://cftwbhv6jeqbr" path="res://box.tscn" id="2_q6r6c"]
 [ext_resource type="Script" uid="uid://r70awwwr1qqb" path="res://tile_map.gd" id="3_q6r6c"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0e48y"]
@@ -148,6 +149,7 @@ sources/0 = SubResource("TileSetAtlasSource_0e48y")
 
 [node name="GameManager" type="Node2D" unique_id=397004167]
 script = ExtResource("1_0hol4")
+box_scene = ExtResource("2_q6r6c")
 
 [node name="TileMap" type="TileMap" parent="." unique_id=2013324322]
 tile_set = SubResource("TileSet_epypp")

@@ -26,7 +26,9 @@ var goal_tiles: int = 0
 var nr_of_boxes: int = 0
 var temp_pos = Vector2(520, 296)
 
-var box_scene = preload("res://box.tscn")
+@export var box_scene: PackedScene
+@onready var box_template: Node2D = $Box_Template
+
 
 
 # Called when the node enters the scene tree for the first time.
@@ -38,8 +40,8 @@ func _ready() -> void:
 	#add_child(box)
 	#print("box spawned at", box.global_position)
 	var layout = [
-		[0,1,1,1,1,1,1],
-		[0,0,0,0,0,2,1],
+		[1,1,1,1,1,1,1],
+		[1,0,0,0,0,2,1],
 		[1,0,1,0,1,0,1],
 		[1,0,0,0,1,0,1],
 		[1,1,1,0,1,0,1],
@@ -79,8 +81,8 @@ func grid_to_world(x,y):
 
 func spawn_box(pos: Vector2i):
 	var box = box_scene.instantiate()
-	var local_pos = tile_map.map_to_local(pos)
-	box.global_position = tile_map.to_global(local_pos)
-	add_child(box)
+	var tile_local_pos = tile_map.map_to_local(pos)
+	box.position = tile_map.position + tile_local_pos
 	box.move_back.connect(player._on_box_move_back)
-	print("spawned box, position =", box.position)
+	add_child(box)
+	print("spawned box, position =", box.global_position)
