@@ -23,8 +23,8 @@ var can_move: bool = true
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
+	down_collider.disabled = false
 	up_collider.disabled = true
-	down_collider.disabled = true
 	left_collider.disabled = true
 	right_collider.disabled = true
 func _on_can_box_move(notifier: bool):
@@ -56,18 +56,18 @@ func _physics_process(delta: float) -> void:
 		
 	if Input.is_action_just_pressed("ui_left") and !left.is_colliding() and can_move :
 		is_moving = true
-		right_collider.disabled = false
+		right_collider.disabled = true
 		up_collider.disabled = true
 		down_collider.disabled = true
-		left_collider.disabled = true
+		left_collider.disabled = false
 		self.position += LEFT
 		is_moving = false
 		return
 	
 	if Input.is_action_just_pressed("ui_right") and !right.is_colliding() and can_move:
 		is_moving = true
-		left_collider.disabled = false
-		right_collider.disabled = true
+		left_collider.disabled = true
+		right_collider.disabled = false
 		up_collider.disabled = true
 		down_collider.disabled = true
 		self.position += RIGHT

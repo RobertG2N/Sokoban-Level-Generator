@@ -162,7 +162,7 @@ tile_map_data = PackedByteArray("AAAcABYAAAABAAIAAAAcABcAAAABAAIAAAAdABcAAAABAAI
 tile_set = SubResource("TileSet_epypp")
 
 [node name="Player" parent="." unique_id=25050274 instance=ExtResource("2_epypp")]
-position = Vector2(208, 40)
+position = Vector2(552, 296)
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=68083188]
 position = Vector2(544.00006, 274.00003)
