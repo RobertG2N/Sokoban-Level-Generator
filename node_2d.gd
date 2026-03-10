@@ -12,8 +12,8 @@ var offset_tiles = Vector2(-3,-3)
 var offset_pixels : Vector2
 var pixel_grid_position
 var grid_to_pixel
-var width = 7
-var height = 7
+var width = 11
+var height = 11
 var grid = []  # start empty
 var floor_tile_atlas_coords = Vector2i(1,1)
 var start = Vector2(29,13)
@@ -49,13 +49,17 @@ func _ready() -> void:
 	#add_child(box)
 	#print("box spawned at", box.global_position)
 	var layout = [
-		[1,1,1,1,1,1,1],
-		[1,0,0,0,0,2,1],
-		[1,0,1,0,1,0,1],
-		[1,0,0,0,1,0,1],
-		[1,1,1,0,1,0,1],
-		[1,2,0,0,0,0,1],
-		[1,1,1,1,1,1,1]
+		[1,1,1,1,1,1,1,1,1,1,1],
+		[1,0,0,0,0,0,0,0,0,0,1],
+		[1,0,1,0,0,0,0,0,1,0,1],
+		[1,0,0,0,1,0,1,0,0,0,1],
+		[1,0,0,0,2,0,0,0,0,0,1],
+		[1,0,0,1,0,2,0,1,0,0,1],
+		[1,0,0,0,0,0,0,0,0,0,1],
+		[1,0,1,0,0,0,0,0,1,0,1],
+		[1,0,0,0,1,0,1,0,0,0,1],
+		[1,0,0,0,0,2,0,0,0,0,1],
+		[1,1,1,1,1,1,1,1,1,1,1]
 	]
 	for y in range(height):
 		var row = []
@@ -79,8 +83,8 @@ func _ready() -> void:
 					print(tile_coords)
 			#tile_map.set_cell(0, tile_coords, source_id, atlas_coords)
 		grid.append(row)
-	#place_player()
-	do_reverse_generation(15)
+	place_player()
+	do_reverse_generation(30)
 	
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
@@ -117,11 +121,12 @@ func is_floor(cell: Vector2i) -> bool:
 	var data = tile_map.get_cell_atlas_coords(0, cell)
 	return data == floor_tile_atlas_coords
 
-func is_box_at(cell: Vector2i) -> bool:
-	for c in get_children():
-		if c.is_in_group("boxes"):
-			if world_to_grid(c.position) == cell:
-				return true
+func is_box_at(cell: Vector2i, ignore_box = null) -> bool:
+	for box in box_list:
+		if box == ignore_box:
+			continue
+		if world_to_grid(box.position) == cell:
+			return true
 	return false
 
 func player_can_reach(target: Vector2i) -> bool:
@@ -170,37 +175,91 @@ func place_player():
 			return
 
 func do_reverse_generation(steps: int):
-	for i in steps:
-		var rand_dir_index = randi_range(0,3)
-		for j in box_list.size():
-			do_one_reverse_push(box_list[j], rand_dir_index)
-			#if box_list[j] == null:
-				#continue
-			#else: 
-				#box_list[j]. position = tile_map.map_to_local(unique_box_pos_history.pop_front())
-				
-		
-	
+	for i in range(steps):
 
-func do_one_reverse_push(box, dir):
-	var b = tile_map.local_to_map(box.position)
-	var p = tile_map.local_to_map(player.position)
-	var next = b + dirs[dir]
-	if can_reverse_push(next):
-		p = b
-		b = next
-		box_pos_history.append(b)
+		box_list.shuffle()
+
+		for box in box_list:
+
+			var flood = compute_player_flood(box)
+
+			if do_one_reverse_push(box, flood):
+				break
+
+func do_one_reverse_push(box, flood):
+	var box_cell = world_to_grid(box.position)
+	dirs.shuffle()
+	for dir in dirs:
+		print("trying dir:", dir)
+		var new_box = box_cell + dir
+		var player_cell = box_cell - dir
+		if not in_bounds(new_box):
+			print(" fail: new_box out of bounds")
+			continue
+		if not in_bounds(player_cell):
+			print(" fail: player_cell out of bounds")
+			continue
+		if is_wall(new_box):
+			print(" fail: wall at new_box")
+			continue
+		if is_box_at(new_box, box):
+			print(" fail: box at new_box")
+			continue
+		if is_deadlock(new_box):
+			print(" fail: deadlock")
+			continue
+		if is_wall(player_cell):
+			print(" fail: wall at player_cell")
+			continue
+		if is_box_at(player_cell, box):
+			print(" fail: box at player_cell")
+			continue
+		if not flood.has(player_cell):
+			print(" fail: player can't reach", player_cell)
+			continue
 		
-		for i in box_pos_history:
-			if not i in unique_box_pos_history:
-				unique_box_pos_history.append(i)
-				print(unique_box_pos_history)
-			else: continue
-		box.position = tile_map.map_to_local(unique_box_pos_history.pop_front())
-		
-		player.position = tile_map.map_to_local(p)
-	else: return
-	
+		print(" SUCCESS PUSH")
+		# valid reverse push
+		print("box moved", box_cell, "->", new_box)
+		box.position = grid_to_world_pos(new_box)
+		player.position = grid_to_world_pos(box_cell)
+		return true
+	return false
+
+func compute_player_flood(ignore_box = null) -> Dictionary:
+	var start = world_to_grid(player.position)
+
+	var open = [start]
+	var visited = {}
+
+	while open.size() > 0:
+
+		var cur = open.pop_front()
+
+		if visited.has(cur):
+			continue
+
+		visited[cur] = true
+
+		for d in dirs:
+
+			var nxt = cur + d
+
+			if not in_bounds(nxt):
+				continue
+
+			if visited.has(nxt):
+				continue
+
+			if is_wall(nxt):
+				continue
+
+			if is_box_at(nxt, ignore_box):
+				continue
+
+			open.append(nxt)
+
+	return visited
 
 func in_bounds(cell: Vector2i) -> bool:
 	return (
@@ -209,3 +268,24 @@ func in_bounds(cell: Vector2i) -> bool:
 	cell.y >= start.y and
 	cell.y < start.y + height
 	)
+
+func is_deadlock(cell: Vector2i) -> bool:
+	# allow boxes on goals
+	if tile_map.get_cell_atlas_coords(0, cell) == goal_tile:
+		return false
+
+	var up = is_wall(cell + Vector2i(0,-1))
+	var down = is_wall(cell + Vector2i(0,1))
+	var left = is_wall(cell + Vector2i(-1,0))
+	var right = is_wall(cell + Vector2i(1,0))
+
+	if up and left:
+		return true
+	if up and right:
+		return true
+	if down and left:
+		return true
+	if down and right:
+		return true
+
+	return false
