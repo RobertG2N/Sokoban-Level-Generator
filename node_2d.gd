@@ -37,6 +37,24 @@ var unique_box_pos_history = []
 
 @export var box_scene: PackedScene
 
+class State:
+	var boxes: Array
+	var player: Vector2i
+	var depth: int
+
+	func _init(b: Array, p: Vector2i, d: int):
+		boxes  = b.duplicate()
+		player = p
+		depth  = d
+	
+	func key() -> String:
+		var sorted = boxes.duplicate()
+		sorted.sort_custom(func(a, b): return str(a) < str(b))
+		var s = str(player)
+		for box in sorted:
+			s += str(box)
+		return s
+
 
 
 
@@ -44,6 +62,7 @@ var unique_box_pos_history = []
 func _ready() -> void:  
 	await get_tree().physics_frame
 	randomize()
+	#seed(1)
 	#var box = box_scene.instantiate()
 	#box.global_position = Vector2(552, 232)
 	#add_child(box)
@@ -51,14 +70,14 @@ func _ready() -> void:
 	var layout = [
 		[1,1,1,1,1,1,1,1,1,1,1],
 		[1,0,0,0,2,0,0,0,0,0,1],
-		[1,0,1,0,0,0,0,0,1,0,1],
+		[1,0,1,0,0,0,0,0,1,0,0],
 		[1,0,0,0,1,0,1,0,0,0,1],
 		[1,0,0,0,0,0,0,0,0,0,1],
 		[1,0,0,1,0,0,0,1,0,0,1],
-		[1,0,0,0,2,0,0,2,0,0,1],
-		[1,0,1,0,0,0,0,0,1,0,1],
-		[1,0,0,0,1,0,1,0,0,0,1],
 		[1,0,0,0,0,2,0,0,0,0,1],
+		[1,0,1,0,0,0,0,0,1,2,1],
+		[1,2,0,0,1,0,1,0,0,0,1],
+		[1,0,0,0,0,0,0,0,0,0,1],
 		[1,1,1,1,1,1,1,1,1,1,1]
 	]
 	for y in range(height):
@@ -83,8 +102,9 @@ func _ready() -> void:
 					print(tile_coords)
 			#tile_map.set_cell(0, tile_coords, source_id, atlas_coords)
 		grid.append(row)
-	place_player()
-	do_reverse_generation(30)
+	#place_player()
+	#do_reverse_generation(20)
+	#do_reverse_generation_dfs(6)
 	
 
 # Called every frame. 'delta' is the elapsed time since the previous frame.
@@ -121,6 +141,10 @@ func is_floor(cell: Vector2i) -> bool:
 	var data = tile_map.get_cell_atlas_coords(0, cell)
 	return data == floor_tile_atlas_coords
 
+func is_goal(cell: Vector2i) -> bool:
+	var data = tile_map.get_cell_atlas_coords(0, cell)
+	return data == goal_tile
+
 func is_box_at(cell: Vector2i, ignore_box = null) -> bool:
 	for box in box_list:
 		if box == ignore_box:
@@ -128,6 +152,10 @@ func is_box_at(cell: Vector2i, ignore_box = null) -> bool:
 		if world_to_grid(box.position) == cell:
 			return true
 	return false
+
+func is_border_wall(cell: Vector2i) -> bool:
+	return ( cell.x == start.x or cell.x == start.x + width - 1 or cell.y == start.y or cell.y == start.y + height - 1)
+
 
 ## Checks if the player can reach a target grid cell without passing through
 ## walls or boxes. Uses a flood-fill / breadth-first search through the grid.
@@ -394,37 +422,166 @@ func in_bounds(cell: Vector2i) -> bool:
 ## Returns true if placing a box on this cell would make it permanently stuck.
 ## Boxes on goal tiles are allowed and are not considered deadlocks.
 func is_deadlock(cell: Vector2i) -> bool:
-	# allow boxes on goals
-	# If this tile is a goal tile, allow the box to be placed here.
-	# Even if the goal is in a corner, the box being stuck there is fine
-	# because the puzzle considers it solved.
-	if tile_map.get_cell_atlas_coords(0, cell) == goal_tile:
+	if is_goal(cell):
 		return false
-	# Check if there are walls directly adjacent to this tile
-	# in each of the four cardinal directions.
-	var up = is_wall(cell + Vector2i(0,-1))
-	var down = is_wall(cell + Vector2i(0,1))
-	var left = is_wall(cell + Vector2i(-1,0))
-	var right = is_wall(cell + Vector2i(1,0))
+	var up = is_wall(cell + Vector2i( 0, -1))
+	var down = is_wall(cell + Vector2i( 0,  1))
+	var left = is_wall(cell + Vector2i(-1,  0))
+	var right = is_wall(cell + Vector2i( 1,  0))
 	
-	# A box is stuck if it is pushed into a corner formed by two walls.
-	# The following checks detect those corner configurations.
-	
-	# Wall above and wall to the left
-	if up and left:
+	if (up or down) and (left or right):
 		return true
-	# Wall above and wall to the right
-	if up and right:
-		return true
-	# Wall below and wall to the left
-	if down and left:
-		return true
-	# Wall below and wall to the right
-	if down and right:
-		return true
-	# If none of the corner cases are detected,
-	# the tile is not a deadlock position.
+	if up or down:
+		var wall_cell = cell + (Vector2i(0, -1) if up else Vector2i(0, 1))
+		if not is_border_wall(wall_cell):
+			var wall_dir = Vector2i(0, -1) if up else Vector2i(0, 1)
+			if not _goal_along_row(cell, wall_dir):
+				return true
+	if left or right:
+		var wall_cell = cell + (Vector2i(-1, 0) if left else Vector2i(1, 0))
+		if not is_border_wall(wall_cell):
+			var wall_dir = Vector2i(-1, 0) if left else Vector2i(1, 0)
+			if not _goal_along_col(cell, wall_dir):
+				return true
 	return false
+
+func _goal_along_row(cell: Vector2i, wall_dir: Vector2i) -> bool:
+	if is_goal(cell):
+		return true
+	for step_dir in [Vector2i(-1, 0), Vector2i(1, 0)]:
+		var cur = cell
+		while true:
+			cur += step_dir
+			if not in_bounds(cur) or is_wall(cur):
+				break
+			if not is_wall(cur + wall_dir):
+				break
+			if is_goal(cur):
+				return true
+	return false
+
+func _goal_along_col(cell: Vector2i, wall_dir: Vector2i) -> bool:
+	if is_goal(cell):
+		return true
+	var step_dirs = [Vector2i(0, -1), Vector2i(0, 1)]
+	for step_dir in step_dirs:
+		var cur = cell
+		while true:
+			cur += step_dir
+			if not in_bounds(cur) or is_wall(cur):
+				break
+			if not is_wall(cur + wall_dir):
+				break
+			if is_goal(cur):
+				return true
+	return false
+
+func _snapshot_has_box(cell: Vector2i, snapshot: Array, ignore_idx: int) -> bool:
+	for i in range(snapshot.size()):
+		if i == ignore_idx:
+			continue
+		if snapshot[i] == cell:
+			return true
+	return false
+
+func _flood(from: Vector2i, snapshot: Array, ignore_idx: int) -> Dictionary:
+	var open = [from]
+	var visited = {}
+	while open.size() > 0:
+		var cur = open.pop_front()
+		if visited.has(cur):
+			continue
+		visited[cur] = true
+		for d in dirs:
+			var nxt = cur + d
+			if not in_bounds(nxt):
+				continue
+			if visited.has(nxt):
+				continue
+			if is_wall(nxt):
+				continue
+			if _snapshot_has_box(nxt, snapshot, ignore_idx):
+				continue
+			open.append(nxt)
+	return visited
+	
+
+func _dfs_generate(box_idx: int, initial_boxes: Array, initial_player: Vector2i, max_depth: int) -> State:
+	var start_state = State.new(initial_boxes, initial_player, 0)
+	var stack: Array = []
+	var visited: Dictionary = {}
+	stack.push_back(start_state)
+	visited[start_state.key()] = true
+	var best: State = start_state
+	while stack.size() > 0:
+		var state: State = stack.pop_back()
+		if state.depth > best.depth:
+			best = state
+		if state.depth >= max_depth:
+			continue
+		var candidates = []
+		for d in dirs:
+			candidates.append(d)
+		candidates.shuffle()
+		#print(candidates)
+		for dir in candidates:
+			var box_cell = state.boxes[box_idx]
+			var new_box = box_cell + dir
+			var req_player = box_cell - dir
+			if not in_bounds(new_box): print("fail: out of bounds ", new_box); continue
+			if not in_bounds(req_player): print("fail: req_player out of bounds ", req_player); continue
+			if is_wall(new_box): print("fail: wall at ", new_box); continue
+			if is_wall(req_player): print("fail: wall at req_player ", req_player); continue
+			var new_boxes = state.boxes.duplicate()
+			new_boxes[box_idx] = new_box
+			if _snapshot_has_box(new_box, state.boxes, box_idx): print("fail: box at ", new_box); continue
+			if _snapshot_has_box(req_player, state.boxes, box_idx): print("fail: box at req_player ", req_player); continue
+			if is_deadlock(new_box): print("fail: deadlock at ", new_box); continue
+			var flood = _flood(state.player, state.boxes, box_idx)
+			if not flood.has(req_player): print("fail: player cant reach ", req_player); continue
+			var next_state = State.new(new_boxes, box_cell, state.depth + 1)
+			if visited.has(next_state.key()): continue
+			visited[next_state.key()] = true
+			stack.push_back(next_state)
+	return best
+
+func do_reverse_generation_dfs(max_depth: int = 20):
+	var box_snapshot: Array = []
+	for b in box_list:
+		box_snapshot.append(world_to_grid(b.position))
+	var player_cell = world_to_grid(player.position)
+	for i in range(box_list.size()):
+		var best_state = _dfs_generate(i, box_snapshot, player_cell, max_depth)
+		box_snapshot[i] = best_state.boxes[i]
+		player_cell = best_state.player
+	for i in range(box_list.size()):
+		box_list[i].position = grid_to_world_pos(box_snapshot[i])
+	var final_state = State.new(box_snapshot, player_cell, 0)
+	_place_player_final(final_state)
+
+func _place_player_final(state: State):
+	var best_cell  = Vector2i(-1, -1)
+	var best_score = -1
+	
+	for y in range(height):
+		for x in range(width):
+			var cell = Vector2i(start.x + x, start.y + y)
+			if is_wall(cell):
+				continue
+			if _snapshot_has_box(cell, state.boxes, -1):
+				continue
+			var score = 0
+			for box_cell in state.boxes:
+				score += abs(cell.x - box_cell.x) + abs(cell.y - box_cell.y)
+			if score > best_score:
+				best_score = score
+				best_cell  = cell
+	if best_cell != Vector2i(-1, -1):
+		player.position = grid_to_world_pos(best_cell)
+	else:
+		place_player()
+
+
 
 func place_boxes_randomly(steps):
 	pass
