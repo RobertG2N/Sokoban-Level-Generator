@@ -1,0 +1,7 @@
+[gd_resource type="Resource" script_class="Layouts" format=3 uid="uid://duun3frr8hm13"]
+
+[ext_resource type="Script" uid="uid://e2lwfql012j7" path="res://level_layouts.gd" id="1_y0ddi"]
+
+[resource]
+script = ExtResource("1_y0ddi")
+metadata/_custom_type_script = "uid://e2lwfql012j7"

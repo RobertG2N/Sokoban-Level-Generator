@@ -5,6 +5,8 @@
 [ext_resource type="PackedScene" uid="uid://b6vfn63n64iid" path="res://player.tscn" id="2_epypp"]
 [ext_resource type="PackedScene" uid="uid://cftwbhv6jeqbr" path="res://box.tscn" id="2_q6r6c"]
 [ext_resource type="Script" uid="uid://r70awwwr1qqb" path="res://tile_map.gd" id="3_q6r6c"]
+[ext_resource type="Texture2D" uid="uid://lqmksukfll8l" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_1.png" id="6_d21ai"]
+[ext_resource type="Texture2D" uid="uid://n2vytvkonaln" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_3.png" id="7_rj586"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0e48y"]
 texture = ExtResource("1_wtcfe")
@@ -165,7 +167,28 @@ tile_set = SubResource("TileSet_epypp")
 position = Vector2(552, 296)
 
 [node name="Camera2D" type="Camera2D" parent="." unique_id=68083188]
-position = Vector2(544, 291.00003)
+position = Vector2(590, 296.00003)
 rotation = -3.1415925
 scale = Vector2(0.5445564, 0.44595522)
 zoom = Vector2(3, 3)
+
+[node name="RetryLevel" type="Button" parent="." unique_id=341098874]
+offset_left = 485.99997
+offset_top = 193.00002
+offset_right = 600.0
+offset_bottom = 224.00002
+scale = Vector2(0.5604738, 0.49908996)
+text = "Retry Level"
+icon = ExtResource("6_d21ai")
+
+[node name="NewLevel" type="Button" parent="." unique_id=1946175130]
+offset_left = 406.0
+offset_top = 193.0
+offset_right = 514.0
+offset_bottom = 224.0
+scale = Vector2(0.64, 0.48000002)
+text = "New Level"
+icon = ExtResource("7_rj586")
+
+[connection signal="pressed" from="RetryLevel" to="." method="_on_retry_level_pressed"]
+[connection signal="pressed" from="NewLevel" to="." method="_on_new_level_pressed"]

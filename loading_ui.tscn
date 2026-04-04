@@ -1,0 +1,40 @@
+[gd_scene format=3 uid="uid://cdxcf0jya1pus"]
+
+[ext_resource type="Texture2D" uid="uid://c5nnuua36d4xk" path="res://2D Pixel Dungeon Asset Pack/Dungeon_Tileset_at.png" id="2_yft5a"]
+
+[sub_resource type="GDScript" id="GDScript_5yxgd"]
+script/source = "extends CanvasLayer
+
+func show_loading():
+	visible = true
+
+func hide_loading():
+	visible = false
+"
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_4jeoo"]
+atlas = ExtResource("2_yft5a")
+region = Rect2(0, 0, 512, 512)
+
+[node name="LoadingUI" type="CanvasLayer" unique_id=2042572470]
+layer = 100
+script = SubResource("GDScript_5yxgd")
+
+[node name="TextureRect" type="TextureRect" parent="." unique_id=216431850]
+z_index = 100
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+texture = SubResource("AtlasTexture_4jeoo")
+
+[node name="Label" type="Label" parent="." unique_id=760507116]
+z_index = 101
+offset_left = 851.0
+offset_top = 515.0
+offset_right = 945.0
+offset_bottom = 544.0
+scale = Vector2(2.564573, 2.2004106)
+text = "Loading..."
+uppercase = true
