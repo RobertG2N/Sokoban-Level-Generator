@@ -35,14 +35,6 @@ class State:
 		boxes  = b.duplicate()
 		player = p
 		depth  = d
-	
-	func key() -> String:
-		var sorted = boxes.duplicate()
-		sorted.sort_custom(func(a, b): return str(a) < str(b))
-		var s = str(player)
-		for box in sorted:
-			s += str(box)
-		return s
 
 var samples = []
 var patterns = []
@@ -51,7 +43,6 @@ var nr_of_goals = 2
 var layouts: Layouts = load("res://layouts.tres")
 var reverse_thread: Thread
 var reverse_running := false
-var current_layout: Array = []
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:  
@@ -120,8 +111,7 @@ func generate_level(w: int, h: int) -> void:
 					spawn_box(tile_coords)
 
 	place_player()
-	current_layout = layout.duplicate(true)
-	_start_reverse_thread(current_layout)
+	_start_reverse_thread(layout.duplicate(true))
 
 
 
@@ -357,9 +347,6 @@ func is_wall(cell: Vector2i) -> bool:
 	var data = tile_map.get_cell_atlas_coords(0, cell)
 	return data == wall_tile_atlas_coords
 
-func is_goal(cell: Vector2i) -> bool:
-	var data = tile_map.get_cell_atlas_coords(0, cell)
-	return data == goal_tile
 
 func is_box_at(cell: Vector2i, ignore_box = null) -> bool:
 	for box in box_list:
@@ -377,16 +364,6 @@ func is_next_to_border(cell: Vector2i) -> bool:
 		cell.y == start.y + 1 or
 		cell.y == start.y + height - 2
 	)
-
-func _canonical_player_cell(player_cell: Vector2i, boxes: Array) -> Vector2i:
-	var flood = _flood(player_cell, boxes, -1)
-	var best = Vector2i(999999, 999999)
-
-	for cell in flood.keys():
-		if cell.x < best.x or (cell.x == best.x and cell.y < best.y):
-			best = cell
-
-	return best
 
 
 
@@ -420,42 +397,6 @@ func in_bounds(cell: Vector2i) -> bool:
 	cell.y < start.y + height
 	)
 
-## Detects simple Sokoban corner deadlocks.
-## Returns true if placing a box on this cell would make it permanently stuck.
-## Boxes on goal tiles are allowed and are not considered deadlocks.
-func is_deadlock(cell: Vector2i) -> bool:
-	if is_goal(cell):
-		return false
-
-	var up = is_wall(cell + Vector2i(0, -1))
-	var down = is_wall(cell + Vector2i(0, 1))
-	var left = is_wall(cell + Vector2i(-1, 0))
-	var right = is_wall(cell + Vector2i(1, 0))
-
-	# 1. true corner deadlock
-	if (up or down) and (left or right):
-		return true
-
-	# 2. next to outer border = dead
-	# this is much cheaper and less strict than full wall-line analysis
-	if is_next_to_border(cell):
-		return true
-
-	return false
-
-
-func _state_key(boxes: Array, player_cell: Vector2i) -> String:
-	var sorted = boxes.duplicate()
-	sorted.sort_custom(func(a, b): return str(a) < str(b))
-
-	var canonical_player = _canonical_player_cell(player_cell, boxes)
-
-	var s = str(canonical_player)
-	for box in sorted:
-		s += str(box)
-	return s
-
-
 func _snapshot_has_box(cell: Vector2i, snapshot: Array, ignore_idx: int) -> bool:
 	for i in range(snapshot.size()):
 		if i == ignore_idx:
@@ -463,134 +404,6 @@ func _snapshot_has_box(cell: Vector2i, snapshot: Array, ignore_idx: int) -> bool
 		if snapshot[i] == cell:
 			return true
 	return false
-
-func _flood(from: Vector2i, snapshot: Array, ignore_idx: int) -> Dictionary:
-	var open = [from]
-	var visited = {}
-	while open.size() > 0:
-		var cur = open.pop_front()
-		if visited.has(cur):
-			continue
-		visited[cur] = true
-		for d in dirs:
-			var nxt = cur + d
-			if not in_bounds(nxt):
-				continue
-			if visited.has(nxt):
-				continue
-			if is_wall(nxt):
-				continue
-			if _snapshot_has_box(nxt, snapshot, ignore_idx):
-				continue
-			open.append(nxt)
-	return visited
-	
-
-func _dfs_generate_full(initial_boxes: Array, initial_player: Vector2i, max_depth: int, max_nodes: int = 5000) -> State:
-
-	var start_state = State.new(initial_boxes, initial_player, 0)
-	var stack: Array = [start_state]
-	var visited: Dictionary = {}
-	visited[_state_key(start_state.boxes, start_state.player)] = true
-
-	var goal_cells = initial_boxes.duplicate()
-	var best: State = start_state
-	var best_score := score_state(start_state, goal_cells)
-
-	var nodes_expanded := 0
-
-	while stack.size() > 0:
-		var state: State = stack.pop_back()
-		nodes_expanded += 1
-
-		var current_score = score_state(state, goal_cells)
-		if current_score > best_score:
-			best = state
-			best_score = current_score
-
-		if state.depth >= max_depth:
-			continue
-
-		if nodes_expanded >= max_nodes:
-			break
-
-		var box_indices: Array = []
-		for i in range(state.boxes.size()):
-			box_indices.append(i)
-		box_indices.shuffle()
-
-		for box_idx in box_indices:
-			var box_cell: Vector2i = state.boxes[box_idx]
-			var flood = _flood(state.player, state.boxes, box_idx)
-
-			var dir_list = dirs.duplicate()
-			dir_list.shuffle()
-
-			for dir in dir_list:
-				var new_box: Vector2i = box_cell + dir
-				var req_player: Vector2i = box_cell - dir
-
-				if not in_bounds(new_box):
-					continue
-				if not in_bounds(req_player):
-					continue
-
-				if is_wall(new_box):
-					continue
-				if is_wall(req_player):
-					continue
-
-				if _snapshot_has_box(new_box, state.boxes, box_idx):
-					continue
-				if _snapshot_has_box(req_player, state.boxes, box_idx):
-					continue
-
-				if is_deadlock(new_box):
-					continue
-
-				var local_new_box = new_box - start
-				if not reachable_cells.has(local_new_box):
-					continue
-
-				if not flood.has(req_player):
-					continue
-
-				var new_boxes = state.boxes.duplicate()
-				new_boxes[box_idx] = new_box
-
-				var next_state = State.new(new_boxes, box_cell, state.depth + 1)
-				var k = _state_key(next_state.boxes, next_state.player)
-
-				if visited.has(k):
-					continue
-
-				visited[k] = true
-				stack.push_back(next_state)
-
-	return best
-
-func do_reverse_generation_dfs(max_depth: int = 20, max_nodes: int = 5000):
-	var box_snapshot: Array = []
-	for b in box_list:
-		box_snapshot.append(world_to_grid(b.position))
-
-	var player_cell: Vector2i = world_to_grid(player.position)
-	var goal_cells = box_snapshot.duplicate()
-
-	var best_state = _dfs_generate_full(box_snapshot, player_cell, max_depth, max_nodes)
-
-	for i in range(box_list.size()):
-		box_list[i].position = grid_to_world_pos(best_state.boxes[i])
-
-	player.position = grid_to_world_pos(best_state.player)
-
-	print("final reverse depth = ", best_state.depth)
-	print("final score = ", score_state(best_state, goal_cells))
-
-	for i in range(best_state.boxes.size()):
-		print("box ", i, " final cell = ", best_state.boxes[i])
-
-	print("player final cell = ", best_state.player)
 
 
 func is_layout_connected(layout: Array) -> bool:
