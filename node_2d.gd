@@ -2,13 +2,13 @@ extends Node2D
 
 @onready var tile_map: TileMap = $TileMap
 @onready var player: Node2D = $Player
-
+@onready var retry_button: Button = $RetryLevel
+@onready var new_level_button: Button = $NewLevel
 
 
 
 var width = 15
 var height = 12
-var grid = []  # start empty
 var floor_tile_atlas_coords = Vector2i(1,1)
 var start = Vector2i(29,13)
 var source_id = 0
@@ -49,6 +49,9 @@ var patterns = []
 var adjacency = {}
 var nr_of_goals = 2
 var layouts: Layouts = load("res://layouts.tres")
+var reverse_thread: Thread
+var reverse_running := false
+var current_layout: Array = []
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:  
@@ -64,50 +67,61 @@ func _ready() -> void:
 	generate_level(width, height)
 	
 
-# Called every frame. 'delta' is the elapsed time since the previous frame.
-func _process(delta: float) -> void:
-	pass
-
 func generate_level(w: int, h: int) -> void:
+	set_generation_buttons_enabled(false)
 	width = w
 	height = h
-	# clear previous state
-	grid = []
+
 	box_list.clear()
 	for child in get_children():
 		if child.is_in_group("boxes"):
 			child.queue_free()
 	tile_map.clear()
-	
-	var layout = run_wfc(width, height, patterns, adjacency)
-	layout = add_border(layout)
-	while not is_layout_connected(layout):
+
+	var layout: Array = []
+	var attempts := 0
+	var max_attempts := 100
+
+	while attempts < max_attempts:
+		attempts += 1
+
 		layout = run_wfc(width, height, patterns, adjacency)
 		layout = add_border(layout)
-	layout = place_goals(layout, nr_of_goals)
-	reachable_cells = compute_reachable_cells(layout)
-	
+
+		if not is_layout_connected(layout):
+			continue
+
+		layout = place_goals(layout, nr_of_goals)
+		if layout.is_empty():
+			continue
+
+		reachable_cells = compute_reachable_cells(layout)
+		if reachable_cells.is_empty():
+			continue
+
+		break
+
+	if layout.is_empty():
+		push_error("Failed to generate a valid level after %d attempts" % max_attempts)
+		set_generation_buttons_enabled(true)
+		return
+
 	for y in range(height):
-		var row = []
 		for x in range(width):
 			var tile_coords = Vector2i(start.x + x, start.y + y)
-			row.append(tile_coords)
-			var atlas_coords: Vector2i
+
 			match layout[y][x]:
 				0:
-					atlas_coords = floor_tile_atlas_coords
-					tile_map.set_cell(0, tile_coords, source_id, atlas_coords)
+					tile_map.set_cell(0, tile_coords, source_id, floor_tile_atlas_coords)
 				1:
-					atlas_coords = wall_tile_atlas_coords
-					tile_map.set_cell(0, tile_coords, source_id, atlas_coords)
+					tile_map.set_cell(0, tile_coords, source_id, wall_tile_atlas_coords)
 				2:
-					atlas_coords = goal_tile
-					tile_map.set_cell(0, tile_coords, source_id, atlas_coords)
+					tile_map.set_cell(0, tile_coords, source_id, goal_tile)
 					spawn_box(tile_coords)
-		grid.append(row)
-	
+
 	place_player()
-	do_reverse_generation_dfs()
+	current_layout = layout.duplicate(true)
+	_start_reverse_thread(current_layout)
 
 
 
@@ -128,6 +142,210 @@ func spawn_box(pos: Vector2i):
 	print(tile_local_pos)
 	print(tile_map.local_to_map(box.position))
 	print()
+
+func is_wall_in_layout(layout: Array, cell: Vector2i) -> bool:
+	var local = cell - start
+	if local.x < 0 or local.x >= width or local.y < 0 or local.y >= height:
+		return true
+	return layout[local.y][local.x] == 1
+
+func is_goal_in_layout(layout: Array, cell: Vector2i) -> bool:
+	var local = cell - start
+	if local.x < 0 or local.x >= width or local.y < 0 or local.y >= height:
+		return false
+	return layout[local.y][local.x] == 2
+
+func is_deadlock_in_layout_world(layout: Array, cell: Vector2i) -> bool:
+	if is_goal_in_layout(layout, cell):
+		return false
+
+	var up = is_wall_in_layout(layout, cell + Vector2i(0, -1))
+	var down = is_wall_in_layout(layout, cell + Vector2i(0, 1))
+	var left = is_wall_in_layout(layout, cell + Vector2i(-1, 0))
+	var right = is_wall_in_layout(layout, cell + Vector2i(1, 0))
+
+	if (up or down) and (left or right):
+		return true
+
+	if is_next_to_border(cell):
+		return true
+
+	return false
+
+func set_generation_buttons_enabled(enabled: bool) -> void:
+	retry_button.disabled = not enabled
+	new_level_button.disabled = not enabled
+
+func _flood_layout(from: Vector2i, snapshot: Array, ignore_idx: int, layout: Array) -> Dictionary:
+	var open = [from]
+	var visited = {}
+
+	while open.size() > 0:
+		var cur = open.pop_front()
+		if visited.has(cur):
+			continue
+		visited[cur] = true
+
+		for d in dirs:
+			var nxt = cur + d
+			if not in_bounds(nxt):
+				continue
+			if visited.has(nxt):
+				continue
+			if is_wall_in_layout(layout, nxt):
+				continue
+			if _snapshot_has_box(nxt, snapshot, ignore_idx):
+				continue
+			open.append(nxt)
+
+	return visited
+
+func _canonical_player_cell_layout(player_cell: Vector2i, boxes: Array, layout: Array) -> Vector2i:
+	var flood = _flood_layout(player_cell, boxes, -1, layout)
+	var best = Vector2i(999999, 999999)
+
+	for cell in flood.keys():
+		if cell.x < best.x or (cell.x == best.x and cell.y < best.y):
+			best = cell
+
+	return best
+
+func _state_key_layout(boxes: Array, player_cell: Vector2i, layout: Array) -> String:
+	var sorted = boxes.duplicate()
+	sorted.sort_custom(func(a, b): return str(a) < str(b))
+
+	var canonical_player = _canonical_player_cell_layout(player_cell, boxes, layout)
+
+	var s = str(canonical_player)
+	for box in sorted:
+		s += str(box)
+	return s
+
+func _dfs_generate_full_thread(initial_boxes: Array, initial_player: Vector2i, layout: Array, max_depth: int, max_nodes: int = 5000) -> Dictionary:
+	var start_state = State.new(initial_boxes, initial_player, 0)
+	var stack: Array = [start_state]
+	var visited: Dictionary = {}
+	visited[_state_key_layout(start_state.boxes, start_state.player, layout)] = true
+
+	var goal_cells = initial_boxes.duplicate()
+	var best: State = start_state
+	var best_score := score_state(start_state, goal_cells)
+
+	var nodes_expanded := 0
+
+	while stack.size() > 0:
+		var state: State = stack.pop_back()
+		nodes_expanded += 1
+
+		var current_score = score_state(state, goal_cells)
+		if current_score > best_score:
+			best = state
+			best_score = current_score
+
+		if state.depth >= max_depth:
+			continue
+
+		if nodes_expanded >= max_nodes:
+			break
+
+		var box_indices: Array = []
+		for i in range(state.boxes.size()):
+			box_indices.append(i)
+		box_indices.shuffle()
+
+		for box_idx in box_indices:
+			var box_cell: Vector2i = state.boxes[box_idx]
+			var flood = _flood_layout(state.player, state.boxes, box_idx, layout)
+
+			var dir_list = dirs.duplicate()
+			dir_list.shuffle()
+
+			for dir in dir_list:
+				var new_box: Vector2i = box_cell + dir
+				var req_player: Vector2i = box_cell - dir
+
+				if not in_bounds(new_box):
+					continue
+				if not in_bounds(req_player):
+					continue
+
+				if is_wall_in_layout(layout, new_box):
+					continue
+				if is_wall_in_layout(layout, req_player):
+					continue
+
+				if _snapshot_has_box(new_box, state.boxes, box_idx):
+					continue
+				if _snapshot_has_box(req_player, state.boxes, box_idx):
+					continue
+
+				if is_deadlock_in_layout_world(layout, new_box):
+					continue
+
+				var local_new_box = new_box - start
+				if not reachable_cells.has(local_new_box):
+					continue
+
+				if not flood.has(req_player):
+					continue
+
+				var new_boxes = state.boxes.duplicate()
+				new_boxes[box_idx] = new_box
+
+				var next_state = State.new(new_boxes, box_cell, state.depth + 1)
+				var k = _state_key_layout(next_state.boxes, next_state.player, layout)
+
+				if visited.has(k):
+					continue
+
+				visited[k] = true
+				stack.push_back(next_state)
+
+	return {
+		"boxes": best.boxes,
+		"player": best.player,
+		"depth": best.depth,
+		"score": best_score
+	}
+
+func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 5000) -> void:
+	if reverse_running:
+		return
+
+	var box_snapshot: Array = []
+	for b in box_list:
+		box_snapshot.append(world_to_grid(b.position))
+
+	var player_cell: Vector2i = world_to_grid(player.position)
+
+	reverse_running = true
+	reverse_thread = Thread.new()
+	reverse_thread.start(_thread_reverse_job.bind(box_snapshot, player_cell, layout.duplicate(true), max_depth, max_nodes))
+
+func _thread_reverse_job(box_snapshot: Array, player_cell: Vector2i, layout: Array, max_depth: int, max_nodes: int) -> void:
+	var result = _dfs_generate_full_thread(box_snapshot, player_cell, layout, max_depth, max_nodes)
+	call_deferred("_apply_reverse_result", result)
+
+func _apply_reverse_result(result: Dictionary) -> void:
+	for i in range(box_list.size()):
+		box_list[i].position = grid_to_world_pos(result["boxes"][i])
+
+	player.position = grid_to_world_pos(result["player"])
+
+	print("final reverse depth = ", result["depth"])
+	print("final score = ", result["score"])
+
+	reverse_running = false
+
+	if reverse_thread:
+		reverse_thread.wait_to_finish()
+		reverse_thread = null
+	
+	set_generation_buttons_enabled(true)
+
+func _exit_tree() -> void:
+	if reverse_thread:
+		reverse_thread.wait_to_finish()
 
 func world_to_grid(pos: Vector2) -> Vector2i:
 	return tile_map.local_to_map(pos - tile_map.position)
@@ -160,7 +378,15 @@ func is_next_to_border(cell: Vector2i) -> bool:
 		cell.y == start.y + height - 2
 	)
 
+func _canonical_player_cell(player_cell: Vector2i, boxes: Array) -> Vector2i:
+	var flood = _flood(player_cell, boxes, -1)
+	var best = Vector2i(999999, 999999)
 
+	for cell in flood.keys():
+		if cell.x < best.x or (cell.x == best.x and cell.y < best.y):
+			best = cell
+
+	return best
 
 
 
@@ -218,7 +444,16 @@ func is_deadlock(cell: Vector2i) -> bool:
 	return false
 
 
+func _state_key(boxes: Array, player_cell: Vector2i) -> String:
+	var sorted = boxes.duplicate()
+	sorted.sort_custom(func(a, b): return str(a) < str(b))
 
+	var canonical_player = _canonical_player_cell(player_cell, boxes)
+
+	var s = str(canonical_player)
+	for box in sorted:
+		s += str(box)
+	return s
 
 
 func _snapshot_has_box(cell: Vector2i, snapshot: Array, ignore_idx: int) -> bool:
@@ -252,13 +487,13 @@ func _flood(from: Vector2i, snapshot: Array, ignore_idx: int) -> Dictionary:
 	
 
 func _dfs_generate_full(initial_boxes: Array, initial_player: Vector2i, max_depth: int, max_nodes: int = 5000) -> State:
+
 	var start_state = State.new(initial_boxes, initial_player, 0)
 	var stack: Array = [start_state]
 	var visited: Dictionary = {}
-	visited[start_state.key()] = true
+	visited[_state_key(start_state.boxes, start_state.player)] = true
 
 	var goal_cells = initial_boxes.duplicate()
-
 	var best: State = start_state
 	var best_score := score_state(start_state, goal_cells)
 
@@ -286,6 +521,7 @@ func _dfs_generate_full(initial_boxes: Array, initial_player: Vector2i, max_dept
 
 		for box_idx in box_indices:
 			var box_cell: Vector2i = state.boxes[box_idx]
+			var flood = _flood(state.player, state.boxes, box_idx)
 
 			var dir_list = dirs.duplicate()
 			dir_list.shuffle()
@@ -316,7 +552,6 @@ func _dfs_generate_full(initial_boxes: Array, initial_player: Vector2i, max_dept
 				if not reachable_cells.has(local_new_box):
 					continue
 
-				var flood = _flood(state.player, state.boxes, box_idx)
 				if not flood.has(req_player):
 					continue
 
@@ -324,7 +559,7 @@ func _dfs_generate_full(initial_boxes: Array, initial_player: Vector2i, max_dept
 				new_boxes[box_idx] = new_box
 
 				var next_state = State.new(new_boxes, box_cell, state.depth + 1)
-				var k = next_state.key()
+				var k = _state_key(next_state.boxes, next_state.player)
 
 				if visited.has(k):
 					continue
@@ -719,8 +954,12 @@ func is_valid_goal_cell(layout: Array, cell: Vector2i) -> bool:
 
 
 func _on_retry_level_pressed() -> void:
+	if reverse_running:
+		return
 	retry_level()
 
 
 func _on_new_level_pressed() -> void:
+	if reverse_running:
+		return
 	get_tree().reload_current_scene()
