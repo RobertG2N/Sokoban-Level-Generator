@@ -4,7 +4,9 @@ extends Node2D
 @onready var player: Node2D = $Player
 @onready var retry_button: Button = $RetryLevel
 @onready var new_level_button: Button = $NewLevel
-
+@onready var fake_loading_screen: Sprite2D = $FakeLoadingScreen
+@onready var animated_sprite_2d: AnimatedSprite2D = $AnimatedSprite2D
+@onready var label: Label = $Label
 
 
 var width = 15
@@ -56,10 +58,10 @@ func _ready() -> void:
 	
 	seed(current_seed)
 	generate_level(width, height)
-	
 
 func generate_level(w: int, h: int) -> void:
 	set_generation_buttons_enabled(false)
+	display_fake_loading_screen(true)
 	width = w
 	height = h
 
@@ -95,6 +97,7 @@ func generate_level(w: int, h: int) -> void:
 	if layout.is_empty():
 		push_error("Failed to generate a valid level after %d attempts" % max_attempts)
 		set_generation_buttons_enabled(true)
+		display_fake_loading_screen(false)
 		return
 
 	for y in range(height):
@@ -114,10 +117,9 @@ func generate_level(w: int, h: int) -> void:
 	_start_reverse_thread(layout.duplicate(true))
 
 
-
 func retry_level() -> void:
 	seed(current_seed)
-	generate_level(width, height)
+	await generate_level(width, height)
 
 
 func spawn_box(pos: Vector2i):
@@ -331,6 +333,7 @@ func _apply_reverse_result(result: Dictionary) -> void:
 		reverse_thread.wait_to_finish()
 		reverse_thread = null
 	
+	display_fake_loading_screen(false)
 	set_generation_buttons_enabled(true)
 
 func _exit_tree() -> void:
@@ -764,7 +767,12 @@ func is_valid_goal_cell(layout: Array, cell: Vector2i) -> bool:
 
 	return true
 
-
+func display_fake_loading_screen(display: bool) -> void:
+	fake_loading_screen.visible = display
+	animated_sprite_2d.visible = display
+	if display: animated_sprite_2d.play("default")
+	else: animated_sprite_2d.stop()
+	label.visible = display
 
 func _on_retry_level_pressed() -> void:
 	if reverse_running:

@@ -7,6 +7,11 @@
 [ext_resource type="Script" uid="uid://r70awwwr1qqb" path="res://tile_map.gd" id="3_q6r6c"]
 [ext_resource type="Texture2D" uid="uid://lqmksukfll8l" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_1.png" id="6_d21ai"]
 [ext_resource type="Texture2D" uid="uid://n2vytvkonaln" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_3.png" id="7_rj586"]
+[ext_resource type="Texture2D" uid="uid://c5nnuua36d4xk" path="res://2D Pixel Dungeon Asset Pack/Dungeon_Tileset_at.png" id="8_x0ka3"]
+[ext_resource type="Texture2D" uid="uid://cyts3tsnwtxsb" path="res://2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton2/v1/skeleton2_v1_1.png" id="9_0h7mo"]
+[ext_resource type="Texture2D" uid="uid://cjeqrsh3wg8qc" path="res://2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton2/v1/skeleton2_v1_2.png" id="10_nr8wp"]
+[ext_resource type="Texture2D" uid="uid://dltdlqw5hb8hs" path="res://2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton2/v1/skeleton2_v1_3.png" id="11_d2bti"]
+[ext_resource type="Texture2D" uid="uid://dw8ypt4rf0a8m" path="res://2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton2/v1/skeleton2_v1_4.png" id="12_ta5nu"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0e48y"]
 texture = ExtResource("1_wtcfe")
@@ -149,6 +154,32 @@ custom_data_layer_0/name = "tileName"
 custom_data_layer_0/type = 4
 sources/0 = SubResource("TileSetAtlasSource_0e48y")
 
+[sub_resource type="AtlasTexture" id="AtlasTexture_flf07"]
+atlas = ExtResource("8_x0ka3")
+
+[sub_resource type="SpriteFrames" id="SpriteFrames_k73cj"]
+animations = [{
+"frames": [{
+"duration": 1.0,
+"texture": ExtResource("9_0h7mo")
+}, {
+"duration": 1.0,
+"texture": ExtResource("10_nr8wp")
+}, {
+"duration": 1.0,
+"texture": ExtResource("11_d2bti")
+}, {
+"duration": 1.0,
+"texture": ExtResource("12_ta5nu")
+}],
+"loop": true,
+"name": &"default",
+"speed": 5.0
+}]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_x0ka3"]
+atlas = ExtResource("8_x0ka3")
+
 [node name="GameManager" type="Node2D" unique_id=397004167]
 script = ExtResource("1_0hol4")
 box_scene = ExtResource("2_q6r6c")
@@ -189,6 +220,37 @@ offset_bottom = 224.0
 scale = Vector2(0.64, 0.48000002)
 text = "New Level"
 icon = ExtResource("7_rj586")
+
+[node name="FakeLoadingScreen" type="Sprite2D" parent="." unique_id=1171743723]
+visible = false
+z_index = 10
+position = Vector2(590, 295.5)
+scale = Vector2(0.74609375, 0.41992188)
+texture = SubResource("AtlasTexture_flf07")
+
+[node name="AnimatedSprite2D" type="AnimatedSprite2D" parent="." unique_id=274124720]
+visible = false
+z_index = 11
+position = Vector2(716, 357)
+scale = Vector2(2.2500014, 2.1562495)
+sprite_frames = SubResource("SpriteFrames_k73cj")
+frame = 3
+frame_progress = 0.73013735
+
+[node name="Label" type="Label" parent="." unique_id=577729769]
+visible = false
+z_index = 11
+offset_left = 687.0
+offset_top = 374.0
+offset_right = 762.0
+offset_bottom = 397.0
+text = "Loading..."
+
+[node name="Background" type="Sprite2D" parent="." unique_id=338454177]
+z_index = -834
+position = Vector2(590, 295.5)
+scale = Vector2(0.74609363, 0.41992185)
+texture = SubResource("AtlasTexture_x0ka3")
 
 [connection signal="pressed" from="RetryLevel" to="." method="_on_retry_level_pressed"]
 [connection signal="pressed" from="NewLevel" to="." method="_on_new_level_pressed"]
