@@ -17,6 +17,9 @@ var level_complete_triggered := false
 var background_track_volume: float = 0.07
 var victory_track_volume: float = 0.2
 
+const PATTERN_SIZE := 3
+var pattern_weights: Array = []
+
 signal on_goal(box)
 signal left_goal(box)
 
@@ -73,10 +76,17 @@ func _ready() -> void:
 	load_save_data()
 	
 	current_seed = randi()
-	samples = [layouts.layout1,layouts.layout3, layouts.layout4, layouts.layout5, layouts.layout6]
-	patterns = extract_patterns(samples, 3)
+	samples = [
+	layouts.layout1, layouts.layout2, layouts.layout3, layouts.layout4, layouts.layout5,
+	layouts.layout6, layouts.layout7, layouts.layout8]
+
+
+	var pattern_data = extract_patterns(samples, PATTERN_SIZE)
+	patterns = pattern_data["patterns"]
+	pattern_weights = pattern_data["weights"]
+
 	print("unique patterns found: ", patterns.size())
-	adjacency = build_adjacency(patterns, 3)
+	adjacency = build_adjacency(patterns, PATTERN_SIZE)
 	
 	seed(current_seed)
 	generate_level(width, height)
@@ -131,12 +141,17 @@ func generate_level(w: int, h: int) -> void:
 	var layout: Array = []
 	var attempts := 0
 	var max_attempts := 100
+	var inner_w: int = max(1, width - 2)
+	var inner_h: int = max(1, height - 2)
 
 	while attempts < max_attempts:
 		attempts += 1
 
-		layout = run_wfc(width, height, patterns, adjacency)
-		layout = add_border(layout)
+		var inner_layout = run_wfc(inner_w, inner_h, patterns, adjacency, pattern_weights)
+		if inner_layout.is_empty():
+			continue
+
+		layout = add_border(inner_layout)
 
 		if not is_layout_connected(layout):
 			continue
@@ -590,19 +605,20 @@ func is_layout_connected(layout: Array) -> bool:
 	return visited.size() == floor_count
 
 func place_goals(layout: Array, num_goals: int) -> Array:
-	var floor_count = count_floor_cells(layout)
-	var candidates = []
+	var floor_count: int = count_floor_cells(layout)
+	var candidates: Array = []
+	var min_reach: int = max(8, int(floor_count * 0.18))
 
 	for y in range(height):
 		for x in range(width):
-			var cell = Vector2i(x, y)
+			var cell := Vector2i(x, y)
 
 			if not is_valid_goal_cell(layout, cell):
 				continue
 
-			var info = score_goal_cell(layout, cell)
+			var info: Dictionary = score_goal_cell(layout, cell)
 
-			if info["score"] < max(6, int(floor_count * 0.15)):
+			if info["reach_size"] < min_reach:
 				continue
 
 			candidates.append(info)
@@ -613,34 +629,48 @@ func place_goals(layout: Array, num_goals: int) -> Array:
 	if candidates.size() < num_goals:
 		return []
 
+	candidates.shuffle()
 	candidates.sort_custom(func(a, b): return a["score"] > b["score"])
 
-	var top_n = min(8, candidates.size())
-	var seed = candidates[randi() % top_n]
-	var core = seed["reach"]
+	var top_n: int = min(10, candidates.size())
+	var seed_index: int = randi() % top_n
+	var seed: Dictionary = candidates[seed_index]
 
-	layout[seed["cell"].y][seed["cell"].x] = 2
-	var goals_placed = 1
+	var seed_cell: Vector2i = seed["cell"]
+	var core: Dictionary = seed["reach"]
 
-	var pool = []
+	layout[seed_cell.y][seed_cell.x] = 2
+
+	var goals_placed: int = 1
+	var placed_goals: Array = [seed_cell]
+
+	var pool: Array = []
 	for item in candidates:
-		if item["cell"] == seed["cell"]:
+		var item_cell: Vector2i = item["cell"]
+
+		if item_cell == seed_cell:
 			continue
-		if core.has(item["cell"]):
+
+		if core.has(item_cell):
 			pool.append(item)
 
 	pool.shuffle()
+	pool.sort_custom(func(a, b): return a["score"] > b["score"])
 
 	for item in pool:
 		if goals_placed >= num_goals:
 			break
 
-		var cell = item["cell"]
+		var cell: Vector2i = item["cell"]
 
 		if has_adjacent_goal(layout, cell):
 			continue
 
+		if not goal_has_spacing(placed_goals, cell, 3):
+			continue
+
 		layout[cell.y][cell.x] = 2
+		placed_goals.append(cell)
 		goals_placed += 1
 
 	if goals_placed < num_goals:
@@ -650,20 +680,37 @@ func place_goals(layout: Array, num_goals: int) -> Array:
 
 
 
-func extract_patterns(layouts: Array, pattern_size: int) -> Array:
-	var patterns = []
+func extract_patterns(layouts: Array, pattern_size: int) -> Dictionary:
+	var patterns: Array = []
+	var weights: Array = []
+	var pattern_index := {}
+
 	for layout in layouts:
-		for y in range(len(layout) - pattern_size + 1):
-			for x in range(len(layout[0]) - pattern_size + 1):
-				var pattern = []
+		for y in range(layout.size() - pattern_size + 1):
+			for x in range(layout[0].size() - pattern_size + 1):
+				var pattern: Array = []
+
 				for dy in range(pattern_size):
-					var row = []
+					var row: Array = []
 					for dx in range(pattern_size):
 						row.append(layout[y + dy][x + dx])
 					pattern.append(row)
-				if not patterns.has(pattern):
+
+				var key := JSON.stringify(pattern)
+
+				if pattern_index.has(key):
+					var idx: int = pattern_index[key]
+					weights[idx] += 1
+				else:
+					var new_idx := patterns.size()
+					pattern_index[key] = new_idx
 					patterns.append(pattern)
-	return patterns
+					weights.append(1)
+
+	return {
+		"patterns": patterns,
+		"weights": weights
+	}
 
 func build_adjacency(patterns: Array, pattern_size: int) -> Dictionary:
 	var adjacency = {}
@@ -711,83 +758,146 @@ func init_wfc(w: int, h: int, num_patterns: int) -> Array:
 		wfc_grid.append(row)
 	return wfc_grid
 
-func get_lowest_entropy_cell(wfc_grid: Array) -> Vector2i:
-	var lowest = 999999
-	var best_cell = Vector2i(-1, -1)
+func weighted_random_choice(candidates: Array, weights: Array) -> int:
+	var total := 0.0
+
+	for pattern_idx in candidates:
+		total += float(weights[pattern_idx])
+
+	if total <= 0.0:
+		return candidates[randi() % candidates.size()]
+
+	var roll := randf() * total
+	var running := 0.0
+
+	for pattern_idx in candidates:
+		running += float(weights[pattern_idx])
+		if roll <= running:
+			return pattern_idx
+
+	return candidates[candidates.size() - 1]
+
+func cell_entropy(candidates: Array, weights: Array) -> float:
+	var sum_w := 0.0
+	var sum_w_log_w := 0.0
+
+	for pattern_idx in candidates:
+		var w := float(weights[pattern_idx])
+		if w <= 0.0:
+			continue
+		sum_w += w
+		sum_w_log_w += w * log(w)
+
+	if sum_w <= 0.0:
+		return 0.0
+
+	return log(sum_w) - (sum_w_log_w / sum_w)
+
+func get_lowest_entropy_cell(wfc_grid: Array, weights: Array) -> Vector2i:
+	var best_entropy := 1.0e20
+	var best_cell := Vector2i(-1, -1)
+
 	for y in range(wfc_grid.size()):
 		for x in range(wfc_grid[y].size()):
-			var count = wfc_grid[y][x].size()
-			if count > 1 and count < lowest:
-				lowest = count
+			var candidates: Array = wfc_grid[y][x]
+
+			if candidates.size() <= 1:
+				continue
+
+			var entropy := cell_entropy(candidates, weights)
+			entropy += randf() * 0.000001
+
+			if entropy < best_entropy:
+				best_entropy = entropy
 				best_cell = Vector2i(x, y)
+
 	return best_cell
 
-func collapse_cell(wfc_grid: Array, cell: Vector2i) -> void:
-	var candidates = wfc_grid[cell.y][cell.x]
-	var chosen = candidates[randi() % candidates.size()]
+func collapse_cell(wfc_grid: Array, cell: Vector2i, weights: Array) -> void:
+	var candidates: Array = wfc_grid[cell.y][cell.x]
+	var chosen := weighted_random_choice(candidates, weights)
 	wfc_grid[cell.y][cell.x] = [chosen]
 
 func propagate(wfc_grid: Array, adjacency: Dictionary, start_cell: Vector2i) -> bool:
 	var stack = [start_cell]
+
 	while stack.size() > 0:
-		var cell = stack.pop_back()
+		var cell: Vector2i = stack.pop_back()
+
 		var neighbours = [
-			[Vector2i(cell.x + 1, cell.y), "right", "left"],
-			[Vector2i(cell.x - 1, cell.y), "left", "right"],
-			[Vector2i(cell.x, cell.y + 1), "down", "up"],
-			[Vector2i(cell.x, cell.y - 1), "up", "down"]
+			[Vector2i(cell.x + 1, cell.y), "right"],
+			[Vector2i(cell.x - 1, cell.y), "left"],
+			[Vector2i(cell.x, cell.y + 1), "down"],
+			[Vector2i(cell.x, cell.y - 1), "up"]
 		]
+
 		for entry in neighbours:
-			var neighbour = entry[0]
-			var dir = entry[1]
-			var opposite = entry[2]
+			var neighbour: Vector2i = entry[0]
+			var dir: String = entry[1]
+
 			if neighbour.x < 0 or neighbour.x >= wfc_grid[0].size():
 				continue
 			if neighbour.y < 0 or neighbour.y >= wfc_grid.size():
 				continue
-			var neighbour_candidates = wfc_grid[neighbour.y][neighbour.x]
-			if neighbour_candidates.size() == 1:
-				continue
-			# build set of all patterns allowed in this direction from current cell
-			var allowed = {}
+
+			var neighbour_candidates: Array = wfc_grid[neighbour.y][neighbour.x]
+
+			var allowed := {}
 			for pattern_idx in wfc_grid[cell.y][cell.x]:
 				for allowed_idx in adjacency[pattern_idx][dir]:
 					allowed[allowed_idx] = true
-			# remove any neighbour candidates not in allowed
-			var new_candidates = []
+
+			var new_candidates: Array = []
 			for candidate in neighbour_candidates:
 				if allowed.has(candidate):
 					new_candidates.append(candidate)
-			# if candidates changed, update and add neighbour to stack
+
+			if new_candidates.is_empty():
+				return false
+
 			if new_candidates.size() != neighbour_candidates.size():
-				if new_candidates.size() == 0:
-					return false # contradiction
 				wfc_grid[neighbour.y][neighbour.x] = new_candidates
 				stack.push_back(neighbour)
+
 	return true
 
-func run_wfc(w: int, h: int, patterns: Array, adjacency: Dictionary) -> Array:
-	var wfc_grid = init_wfc(w, h, patterns.size())
-	
-	while true:
-		var cell = get_lowest_entropy_cell(wfc_grid)
-		if cell == Vector2i(-1, -1):
-			break  # all cells collapsed
-		collapse_cell(wfc_grid, cell)
-		var success = propagate(wfc_grid, adjacency, cell)
-		if not success:
-			# contradiction hit, restart
-			wfc_grid = init_wfc(w, h, patterns.size())
-		
-	# convert wfc grid to layout by reading top left cell of each pattern
-	var layout = []
-	for y in range(h):
-		var row = []
-		for x in range(w):
-			var pattern_idx = wfc_grid[y][x][0]
-			row.append(patterns[pattern_idx][0][0])
-		layout.append(row)
-	return layout
+func run_wfc(
+	w: int,
+	h: int,
+	patterns: Array,
+	adjacency: Dictionary,
+	weights: Array,
+	max_restarts: int = 32
+) -> Array:
+	for attempt in range(max_restarts):
+		var wfc_grid = init_wfc(w, h, patterns.size())
+		var failed := false
+
+		while true:
+			var cell = get_lowest_entropy_cell(wfc_grid, weights)
+
+			if cell == Vector2i(-1, -1):
+				var layout: Array = []
+
+				for y in range(h):
+					var row: Array = []
+					for x in range(w):
+						var pattern_idx: int = wfc_grid[y][x][0]
+						row.append(patterns[pattern_idx][0][0])
+					layout.append(row)
+
+				return layout
+
+			collapse_cell(wfc_grid, cell, weights)
+
+			if not propagate(wfc_grid, adjacency, cell):
+				failed = true
+				break
+
+		if failed:
+			continue
+
+	return []
 
 func compute_reachable_cells(layout: Array) -> Dictionary:
 	var reachable = {}
@@ -819,14 +929,21 @@ func compute_reachable_cells(layout: Array) -> Dictionary:
 					changed = true
 	return reachable
 
-func add_border(layout: Array) -> Array:
+func add_border(inner_layout: Array) -> Array:
+	var full_layout: Array = []
+
 	for y in range(height):
-		layout[y][0] = 1
-		layout[y][width - 1] = 1
-	for x in range(width):
-		layout[0][x] = 1
-		layout[height - 1][x] = 1
-	return layout
+		var row: Array = []
+
+		for x in range(width):
+			if x == 0 or x == width - 1 or y == 0 or y == height - 1:
+				row.append(1)
+			else:
+				row.append(inner_layout[y - 1][x - 1])
+
+		full_layout.append(row)
+
+	return full_layout
 
 func count_floor_cells(layout: Array) -> int:
 	var count = 0
@@ -848,14 +965,39 @@ func has_adjacent_goal(layout: Array, cell: Vector2i) -> bool:
 
 
 func score_goal_cell(layout: Array, cell: Vector2i) -> Dictionary:
-	var temp = layout.duplicate(true)
+	var temp: Array = layout.duplicate(true)
 	temp[cell.y][cell.x] = 2
-	var reach = compute_reachable_cells(temp)
+
+	var reach: Dictionary = compute_reachable_cells(temp)
+	var lane_count: int = count_goal_push_lanes(layout, cell)
+	var open4: int = count_open_neighbors4(layout, cell)
+	var open9: int = count_open_tiles_3x3(layout, cell)
+	var corridor: bool = is_straight_corridor_cell(layout, cell)
+
+	var score: int = 0
+	score += reach.size() * 10
+	score += lane_count * 25
+	score += open4 * 20
+	score += open9 * 3
+
+	if lane_count >= 2:
+		score += 25
+
+	if open9 >= 7:
+		score += 20
+
+	if corridor:
+		score -= 40
 
 	return {
 		"cell": cell,
-		"score": reach.size(),
-		"reach": reach
+		"score": score,
+		"reach": reach,
+		"reach_size": reach.size(),
+		"lane_count": lane_count,
+		"open4": open4,
+		"open9": open9,
+		"corridor": corridor
 	}
 
 
@@ -900,16 +1042,65 @@ func is_open_layout_cell(layout: Array, cell: Vector2i) -> bool:
 		layout[cell.y][cell.x] != 1
 	)
 
+func count_goal_push_lanes(layout: Array, goal: Vector2i) -> int:
+	var count: int = 0
 
-func has_goal_push_lane(layout: Array, goal: Vector2i) -> bool:
 	for d in dirs:
-		var box_from = goal - d
-		var player_from = goal - Vector2i(d.x * 2, d.y * 2)
+		var box_from: Vector2i = goal - d
+		var player_from: Vector2i = goal - Vector2i(d.x * 2, d.y * 2)
 
 		if is_open_layout_cell(layout, box_from) and is_open_layout_cell(layout, player_from):
-			return true
+			count += 1
 
-	return false
+	return count
+
+
+func count_open_neighbors4(layout: Array, cell: Vector2i) -> int:
+	var count: int = 0
+
+	for d in dirs:
+		var n: Vector2i = cell + d
+		if is_open_layout_cell(layout, n):
+			count += 1
+
+	return count
+
+
+func count_open_tiles_3x3(layout: Array, cell: Vector2i) -> int:
+	var count: int = 0
+
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var n := Vector2i(cell.x + dx, cell.y + dy)
+			if is_open_layout_cell(layout, n):
+				count += 1
+
+	return count
+
+
+func is_straight_corridor_cell(layout: Array, cell: Vector2i) -> bool:
+	var left_open: bool = is_open_layout_cell(layout, cell + Vector2i(-1, 0))
+	var right_open: bool = is_open_layout_cell(layout, cell + Vector2i(1, 0))
+	var up_open: bool = is_open_layout_cell(layout, cell + Vector2i(0, -1))
+	var down_open: bool = is_open_layout_cell(layout, cell + Vector2i(0, 1))
+
+	var horizontal_corridor: bool = left_open and right_open and not up_open and not down_open
+	var vertical_corridor: bool = up_open and down_open and not left_open and not right_open
+
+	return horizontal_corridor or vertical_corridor
+
+
+func goal_has_spacing(placed_goals: Array, cell: Vector2i, min_dist: int = 3) -> bool:
+	for existing in placed_goals:
+		var goal_cell: Vector2i = existing
+		var dist: int = abs(goal_cell.x - cell.x) + abs(goal_cell.y - cell.y)
+		if dist < min_dist:
+			return false
+
+	return true
+
+func has_goal_push_lane(layout: Array, goal: Vector2i) -> bool:
+	return count_goal_push_lanes(layout, goal) > 0
 
 func is_valid_goal_cell(layout: Array, cell: Vector2i) -> bool:
 	if layout[cell.y][cell.x] != 0:
@@ -918,7 +1109,22 @@ func is_valid_goal_cell(layout: Array, cell: Vector2i) -> bool:
 	if has_adjacent_goal(layout, cell):
 		return false
 
-	if not has_goal_push_lane(layout, cell):
+	var lane_count: int = count_goal_push_lanes(layout, cell)
+	if lane_count == 0:
+		return false
+
+	var open4: int = count_open_neighbors4(layout, cell)
+	if open4 < 2:
+		return false
+
+	var open9: int = count_open_tiles_3x3(layout, cell)
+	if open9 < 5:
+		return false
+
+	if is_straight_corridor_cell(layout, cell):
+		return false
+
+	if lane_count < 2 and open9 < 6:
 		return false
 
 	return true
