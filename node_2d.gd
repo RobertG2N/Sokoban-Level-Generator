@@ -73,7 +73,7 @@ func _ready() -> void:
 	load_save_data()
 	
 	current_seed = randi()
-	samples = [layouts.layout1, layouts.layout3, layouts.layout4, layouts.layout5, layouts.layout6]
+	samples = [layouts.layout1,layouts.layout3, layouts.layout4, layouts.layout5, layouts.layout6]
 	patterns = extract_patterns(samples, 3)
 	print("unique patterns found: ", patterns.size())
 	adjacency = build_adjacency(patterns, 3)
@@ -313,7 +313,14 @@ func _state_key_layout(boxes: Array, player_cell: Vector2i, layout: Array) -> St
 		s += str(box)
 	return s
 
-func _dfs_generate_full_thread(initial_boxes: Array, initial_player: Vector2i, layout: Array, max_depth: int, max_nodes: int = 5000) -> Dictionary:
+func _dfs_generate_full_thread(
+	initial_boxes: Array,
+	initial_player: Vector2i,
+	layout: Array,
+	reachable_lookup: Dictionary,
+	max_depth: int,
+	max_nodes: int = 5000
+) -> Dictionary:
 	var start_state = State.new(initial_boxes, initial_player, 0)
 	var stack: Array = [start_state]
 	var visited: Dictionary = {}
@@ -321,7 +328,7 @@ func _dfs_generate_full_thread(initial_boxes: Array, initial_player: Vector2i, l
 
 	var goal_cells = initial_boxes.duplicate()
 	var best: State = start_state
-	var best_score := score_state(start_state, goal_cells)
+	var best_score := score_state(start_state, goal_cells, layout)
 
 	var nodes_expanded := 0
 
@@ -329,7 +336,7 @@ func _dfs_generate_full_thread(initial_boxes: Array, initial_player: Vector2i, l
 		var state: State = stack.pop_back()
 		nodes_expanded += 1
 
-		var current_score = score_state(state, goal_cells)
+		var current_score = score_state(state, goal_cells, layout)
 		if current_score > best_score:
 			best = state
 			best_score = current_score
@@ -375,7 +382,7 @@ func _dfs_generate_full_thread(initial_boxes: Array, initial_player: Vector2i, l
 					continue
 
 				var local_new_box = new_box - start
-				if not reachable_cells.has(local_new_box):
+				if not reachable_lookup.has(local_new_box):
 					continue
 
 				if not flood.has(req_player):
@@ -384,7 +391,16 @@ func _dfs_generate_full_thread(initial_boxes: Array, initial_player: Vector2i, l
 				var new_boxes = state.boxes.duplicate()
 				new_boxes[box_idx] = new_box
 
-				var next_state = State.new(new_boxes, box_cell, state.depth + 1)
+				if creates_2x2_lock(layout, new_boxes, new_box):
+					continue
+
+				var next_player: Vector2i = box_cell
+				var next_flood = _flood_layout(next_player, new_boxes, box_idx, layout)
+
+				if not has_reachable_box_push(layout, new_box, new_boxes, next_flood, box_idx):
+					continue
+
+				var next_state = State.new(new_boxes, next_player, state.depth + 1)
 				var k = _state_key_layout(next_state.boxes, next_state.player, layout)
 
 				if visited.has(k):
@@ -393,12 +409,15 @@ func _dfs_generate_full_thread(initial_boxes: Array, initial_player: Vector2i, l
 				visited[k] = true
 				stack.push_back(next_state)
 
+	var final_spawn = find_best_player_spawn(layout, best.boxes, best.player)
+
 	return {
 		"boxes": best.boxes,
 		"player": best.player,
+		"spawn_player": final_spawn,
 		"depth": best.depth,
 		"score": best_score
-	}
+}
 
 func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 5000) -> void:
 	if reverse_running:
@@ -409,20 +428,45 @@ func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 
 		box_snapshot.append(world_to_grid(b.position))
 
 	var player_cell: Vector2i = world_to_grid(player.position)
+	var reachable_snapshot: Dictionary = reachable_cells.duplicate(true)
 
 	reverse_running = true
 	reverse_thread = Thread.new()
-	reverse_thread.start(_thread_reverse_job.bind(box_snapshot, player_cell, layout.duplicate(true), max_depth, max_nodes))
+	reverse_thread.start(
+		_thread_reverse_job.bind(
+			box_snapshot,
+			player_cell,
+			layout.duplicate(true),
+			reachable_snapshot,
+			max_depth,
+			max_nodes
+		)
+	)
 
-func _thread_reverse_job(box_snapshot: Array, player_cell: Vector2i, layout: Array, max_depth: int, max_nodes: int) -> void:
-	var result = _dfs_generate_full_thread(box_snapshot, player_cell, layout, max_depth, max_nodes)
+func _thread_reverse_job(
+	box_snapshot: Array,
+	player_cell: Vector2i,
+	layout: Array,
+	reachable_lookup: Dictionary,
+	max_depth: int,
+	max_nodes: int
+) -> void:
+	var result = _dfs_generate_full_thread(
+		box_snapshot,
+		player_cell,
+		layout,
+		reachable_lookup,
+		max_depth,
+		max_nodes
+	)
 	call_deferred("_apply_reverse_result", result)
 
 func _apply_reverse_result(result: Dictionary) -> void:
 	for i in range(box_list.size()):
 		box_list[i].position = grid_to_world_pos(result["boxes"][i])
 
-	player.position = grid_to_world_pos(result["player"])
+	player.position = grid_to_world_pos(result["spawn_player"])
+	player.position = player.position.round()
 	
 	boxes_on_goals = 0
 	dfs_complete = true
@@ -815,7 +859,7 @@ func score_goal_cell(layout: Array, cell: Vector2i) -> Dictionary:
 	}
 
 
-func score_state(state: State, goal_cells: Array) -> int:
+func score_state(state: State, goal_cells: Array, layout: Array) -> int:
 	var moved_boxes := 0
 	var total_distance := 0
 
@@ -836,10 +880,18 @@ func score_state(state: State, goal_cells: Array) -> int:
 
 		total_distance += best_dist
 
-	# depth is most important
-	# then number of boxes moved off goals
-	# then overall spread from the goal set
-	return state.depth * 10000 + moved_boxes * 1000 + total_distance
+	var reachable_pushes := total_reachable_pushes(layout, state)
+	var edge_penalty := count_edge_boxes(state.boxes)
+	var pair_penalty := count_adjacent_box_pairs(state.boxes)
+
+	return (
+		state.depth * 10000 +
+		moved_boxes * 2000 +
+		total_distance * 100 +
+		reachable_pushes * 250 -
+		edge_penalty * 250 -
+		pair_penalty * 200
+	)
 
 func is_open_layout_cell(layout: Array, cell: Vector2i) -> bool:
 	return (
@@ -870,6 +922,319 @@ func is_valid_goal_cell(layout: Array, cell: Vector2i) -> bool:
 		return false
 
 	return true
+
+func count_box_pushes(layout: Array, box_cell: Vector2i, boxes: Array, ignore_idx: int = -1) -> int:
+	var count := 0
+
+	for dir in dirs:
+		var next_box = box_cell + dir
+		var need_player = box_cell - dir
+
+		if not in_bounds(next_box):
+			continue
+		if not in_bounds(need_player):
+			continue
+
+		if is_wall_in_layout(layout, next_box):
+			continue
+		if is_wall_in_layout(layout, need_player):
+			continue
+
+		if _snapshot_has_box(next_box, boxes, ignore_idx):
+			continue
+		if _snapshot_has_box(need_player, boxes, ignore_idx):
+			continue
+
+		count += 1
+
+	return count
+
+
+func has_good_box_mobility(layout: Array, box_cell: Vector2i, boxes: Array, ignore_idx: int = -1) -> bool:
+	return count_box_pushes(layout, box_cell, boxes, ignore_idx) >= 1
+
+
+func is_blocked_cell(layout: Array, cell: Vector2i, boxes: Array) -> bool:
+	if not in_bounds(cell):
+		return true
+
+	if is_wall_in_layout(layout, cell):
+		return true
+
+	if _snapshot_has_box(cell, boxes, -1):
+		return true
+
+	return false
+
+
+func creates_2x2_lock(layout: Array, boxes: Array, moved_box: Vector2i) -> bool:
+	var offsets = [
+		Vector2i(0, 0),
+		Vector2i(-1, 0),
+		Vector2i(0, -1),
+		Vector2i(-1, -1)
+	]
+
+	for off in offsets:
+		var c1 = moved_box + off
+		var c2 = c1 + Vector2i(1, 0)
+		var c3 = c1 + Vector2i(0, 1)
+		var c4 = c1 + Vector2i(1, 1)
+
+		var cells = [c1, c2, c3, c4]
+		var blocked := 0
+		var box_count := 0
+		var has_non_goal_box := false
+
+		for cell in cells:
+			if is_blocked_cell(layout, cell, boxes):
+				blocked += 1
+
+			if _snapshot_has_box(cell, boxes, -1):
+				box_count += 1
+				if not is_goal_in_layout(layout, cell):
+					has_non_goal_box = true
+
+		if blocked == 4 and box_count >= 2 and has_non_goal_box:
+			return true
+
+	return false
+
+
+func count_edge_boxes(boxes: Array) -> int:
+	var total := 0
+
+	for cell in boxes:
+		if is_next_to_border(cell):
+			total += 1
+
+	return total
+
+
+func count_adjacent_box_pairs(boxes: Array) -> int:
+	var total := 0
+
+	for i in range(boxes.size()):
+		for j in range(i + 1, boxes.size()):
+			var a: Vector2i = boxes[i]
+			var b: Vector2i = boxes[j]
+
+			if abs(a.x - b.x) + abs(a.y - b.y) == 1:
+				total += 1
+
+	return total
+
+
+func total_box_mobility(layout: Array, boxes: Array) -> int:
+	var total := 0
+
+	for i in range(boxes.size()):
+		total += count_box_pushes(layout, boxes[i], boxes, i)
+
+	return total
+
+func count_reachable_pushes_for_box(
+	layout: Array,
+	box_cell: Vector2i,
+	boxes: Array,
+	player_flood: Dictionary,
+	ignore_idx: int = -1
+) -> int:
+	var count := 0
+
+	for dir in dirs:
+		var new_box = box_cell + dir
+		var req_player = box_cell - dir
+
+		if not in_bounds(new_box):
+			continue
+		if not in_bounds(req_player):
+			continue
+
+		if is_wall_in_layout(layout, new_box):
+			continue
+		if is_wall_in_layout(layout, req_player):
+			continue
+
+		if _snapshot_has_box(new_box, boxes, ignore_idx):
+			continue
+		if _snapshot_has_box(req_player, boxes, ignore_idx):
+			continue
+
+		if not player_flood.has(req_player):
+			continue
+
+		count += 1
+
+	return count
+
+
+func has_reachable_box_push(
+	layout: Array,
+	box_cell: Vector2i,
+	boxes: Array,
+	player_flood: Dictionary,
+	ignore_idx: int = -1
+) -> bool:
+	return count_reachable_pushes_for_box(layout, box_cell, boxes, player_flood, ignore_idx) >= 1
+
+
+func total_reachable_pushes(layout: Array, state: State) -> int:
+	var total := 0
+
+	for i in range(state.boxes.size()):
+		var flood = _flood_layout(state.player, state.boxes, i, layout)
+		total += count_reachable_pushes_for_box(layout, state.boxes[i], state.boxes, flood, i)
+
+	return total
+
+func is_open_spawn_cell_layout(layout: Array, cell: Vector2i, boxes: Array) -> bool:
+	if not in_bounds(cell):
+		return false
+
+	if is_wall_in_layout(layout, cell):
+		return false
+
+	if _snapshot_has_box(cell, boxes, -1):
+		return false
+
+	return true
+
+
+func first_open_spawn_cell(layout: Array, boxes: Array) -> Vector2i:
+	for y in range(height):
+		for x in range(width):
+			var cell = Vector2i(start.x + x, start.y + y)
+			if is_open_spawn_cell_layout(layout, cell, boxes):
+				return cell
+
+	return Vector2i(start.x + 1, start.y + 1)
+
+
+func collect_reachable_push_positions(
+	layout: Array,
+	boxes: Array,
+	player_flood: Dictionary
+) -> Array:
+	var found := {}
+
+	for i in range(boxes.size()):
+		var box_cell: Vector2i = boxes[i]
+
+		for dir in dirs:
+			var new_box = box_cell + dir
+			var req_player = box_cell - dir
+
+			if not in_bounds(new_box):
+				continue
+			if not in_bounds(req_player):
+				continue
+
+			if is_wall_in_layout(layout, new_box):
+				continue
+			if is_wall_in_layout(layout, req_player):
+				continue
+
+			if _snapshot_has_box(new_box, boxes, i):
+				continue
+			if _snapshot_has_box(req_player, boxes, i):
+				continue
+
+			if not player_flood.has(req_player):
+				continue
+
+			found[req_player] = true
+
+	return found.keys()
+
+
+func cell_distance_to_nearest_target(cell: Vector2i, targets: Array) -> int:
+	if targets.is_empty():
+		return 999999
+
+	var best := 999999
+	for t in targets:
+		var d = abs(cell.x - t.x) + abs(cell.y - t.y)
+		if d < best:
+			best = d
+
+	return best
+
+
+func level_center_cell() -> Vector2i:
+	return Vector2i(
+		start.x + int(width / 2),
+		start.y + int(height / 2)
+	)
+
+
+func choose_best_spawn_in_component(
+	component_cells: Array,
+	push_positions: Array
+) -> Vector2i:
+	if component_cells.is_empty():
+		return Vector2i(start.x + 1, start.y + 1)
+
+	var center: Vector2i = level_center_cell()
+	var best_cell: Vector2i = component_cells[0]
+	var best_score: int = -999999999
+
+	for cell in component_cells:
+		var nearest_push: int = cell_distance_to_nearest_target(cell, push_positions)
+		var center_dist: int = absi(cell.x - center.x) + absi(cell.y - center.y)
+		var border_penalty: int = 1 if is_next_to_border(cell) else 0
+
+		var score: int = 0
+		score -= nearest_push * 100
+		score -= center_dist * 3
+		score -= border_penalty * 50
+
+		if score > best_score:
+			best_score = score
+			best_cell = cell
+
+	return best_cell
+
+
+func find_best_player_spawn(layout: Array, boxes: Array, fallback_player: Vector2i) -> Vector2i:
+	if is_open_spawn_cell_layout(layout, fallback_player, boxes):
+		# keep as fallback if nothing better is found
+		pass
+	else:
+		fallback_player = first_open_spawn_cell(layout, boxes)
+
+	var seen := {}
+	var best_cell: Vector2i = fallback_player
+	var best_score := -999999999
+
+	for y in range(height):
+		for x in range(width):
+			var seed = Vector2i(start.x + x, start.y + y)
+
+			if seen.has(seed):
+				continue
+
+			if not is_open_spawn_cell_layout(layout, seed, boxes):
+				continue
+
+			var flood = _flood_layout(seed, boxes, -1, layout)
+			for c in flood.keys():
+				seen[c] = true
+
+			var component_cells = flood.keys()
+			var push_positions = collect_reachable_push_positions(layout, boxes, flood)
+			var candidate = choose_best_spawn_in_component(component_cells, push_positions)
+
+			var component_score := 0
+			component_score += push_positions.size() * 10000
+			component_score -= cell_distance_to_nearest_target(candidate, push_positions) * 100
+			component_score -= component_cells.size()
+
+			if component_score > best_score:
+				best_score = component_score
+				best_cell = candidate
+
+	return best_cell
 
 func display_fake_loading_screen(display: bool) -> void:
 	fake_loading_screen.visible = display
