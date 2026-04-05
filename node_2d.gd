@@ -11,12 +11,16 @@ extends Node2D
 @onready var increase_goals_button: Button = $IncreaseGoals
 @onready var decrease_goals_button: Button = $DecreaseGoals
 @onready var goals_label: Label = $GoalsLabel
+@onready var audio_stream_player: AudioStreamPlayer = $AudioStreamPlayer
 
+var level_complete_triggered := false
+var background_track_volume: float = 0.07
+var victory_track_volume: float = 0.2
 
 signal on_goal(box)
 signal left_goal(box)
 
-var width = 15
+var width = 17
 var height = 12
 var floor_tile_atlas_coords = Vector2i(1,1)
 var start = Vector2i(29,13)
@@ -65,11 +69,11 @@ var dfs_complete: bool = false
 func _ready() -> void:  
 	await get_tree().physics_frame
 	randomize()
-	
+	BackgroundTrack.volume_linear = background_track_volume
 	load_save_data()
 	
 	current_seed = randi()
-	samples = [layouts.layout1, layouts.layout2]
+	samples = [layouts.layout1, layouts.layout3, layouts.layout4, layouts.layout5, layouts.layout6]
 	patterns = extract_patterns(samples, 3)
 	print("unique patterns found: ", patterns.size())
 	adjacency = build_adjacency(patterns, 3)
@@ -105,6 +109,7 @@ func save_save_data() -> void:
 	print("save path = ", ProjectSettings.globalize_path(SAVE_PATH))
 
 func generate_level(w: int, h: int) -> void:
+	level_complete_triggered = false
 	set_generation_buttons_enabled(false)
 	display_fake_loading_screen(true)
 	dfs_complete = false
@@ -173,6 +178,8 @@ func generate_level(w: int, h: int) -> void:
 func retry_level() -> void:
 	seed(current_seed)
 	generate_level(width, height)
+	audio_stream_player.stop()
+	BackgroundTrack.volume_linear = background_track_volume
 
 
 func spawn_box(pos: Vector2i):
@@ -214,7 +221,15 @@ func _on_goal_area_body_exited(body: Node, area: Area2D, cell: Vector2i) -> void
 
 
 func check_level_complete() -> void:
-	victory_label.visible = (boxes_on_goals == nr_of_goals.goals)
+	var complete = (boxes_on_goals == nr_of_goals.goals)
+	victory_label.visible = complete
+
+	if complete and not level_complete_triggered:
+		level_complete_triggered = true
+		BackgroundTrack.volume_linear = 0.0
+		audio_stream_player.play()
+		audio_stream_player.volume_linear = background_track_volume
+
 
 func update_goals_label() -> void:
 	goals_label.text = "Boxes: " + str(nr_of_goals.goals)

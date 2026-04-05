@@ -9,6 +9,7 @@ extends Node2D
 @onready var box_right: RayCast2D = $boxRight
 @onready var box_right_2: RayCast2D = $boxRight2
 @onready var box = self
+@onready var audio_stream_player: AudioStreamPlayer = $AudioStreamPlayer
 
 @export var closed_chest: Texture2D
 @export var open_chest: Texture2D
@@ -19,6 +20,7 @@ const DOWN = Vector2(0, 16)
 const LEFT = Vector2(-16, 0)
 const RIGHT = Vector2(16, 0)
 
+var sfx_volume: float = 1.0
 var push_locked := false
 signal move_back(direction: Vector2)
 
@@ -39,6 +41,9 @@ func _on_on_goal_signal_received(box_pass):
 	if box_pass != self:
 		return
 	_open_chest(true)
+	#audio_stream_player.volume_linear = sfx_volume
+	#audio_stream_player.play()
+	
 
 func _on_left_goal_signal_received(box_pass):
 	if box_pass != self:

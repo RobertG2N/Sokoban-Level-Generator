@@ -3,6 +3,7 @@
 [ext_resource type="Script" uid="uid://gl3rcjr4bbn6" path="res://box.gd" id="1_oq5cr"]
 [ext_resource type="Texture2D" uid="uid://h0h01ufhb6he" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/chest/chest_3.png" id="2_3n43a"]
 [ext_resource type="Texture2D" uid="uid://ccid5w0loyflj" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/chest/chest_open_3.png" id="3_jjbh2"]
+[ext_resource type="AudioStream" uid="uid://dmc6ou54osuhc" path="res://good-honour-red-dead-redemption.mp3" id="4_3n43a"]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_bqn3j"]
 atlas = ExtResource("2_3n43a")
@@ -73,3 +74,6 @@ collision_mask = 5
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="." unique_id=925252479]
 shape = SubResource("RectangleShape2D_bqn3j")
+
+[node name="AudioStreamPlayer" type="AudioStreamPlayer" parent="." unique_id=1376839328]
+stream = ExtResource("4_3n43a")
