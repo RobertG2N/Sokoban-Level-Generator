@@ -1,0 +1,8 @@
+[gd_scene format=3 uid="uid://d1bk5pc5uvfdb"]
+
+[ext_resource type="AudioStream" uid="uid://dbfheecydcn7w" path="res://fscm-productions-epic-battle.mp3" id="1_meayh"]
+
+[node name="BackgroundTrack" type="AudioStreamPlayer" unique_id=1536078064]
+stream = ExtResource("1_meayh")
+volume_db = -7.723
+autoplay = true

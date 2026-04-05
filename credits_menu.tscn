@@ -1,0 +1,63 @@
+[gd_scene format=3 uid="uid://dndj4kp455dmc"]
+
+[ext_resource type="Script" uid="uid://mu3ntx6id5a1" path="res://credits_menu.gd" id="1_kdv4w"]
+
+[node name="CreditsMenu" type="CanvasLayer" unique_id=720363824]
+script = ExtResource("1_kdv4w")
+
+[node name="ColorRect" type="ColorRect" parent="." unique_id=109602771]
+z_index = -2
+offset_left = -12.0
+offset_top = -12.0
+offset_right = 1140.0
+offset_bottom = 636.0
+color = Color(0, 0, 0, 1)
+
+[node name="PanelContainer" type="PanelContainer" parent="." unique_id=1154609135]
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -436.125
+offset_top = -248.875
+offset_right = 436.125
+offset_bottom = 248.875
+grow_horizontal = 2
+grow_vertical = 2
+size_flags_horizontal = 4
+
+[node name="MarginContainer" type="MarginContainer" parent="PanelContainer" unique_id=1090407642]
+layout_mode = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="PanelContainer/MarginContainer" unique_id=1371932866]
+layout_mode = 2
+
+[node name="BackgroundTrackCredits" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer" unique_id=1314448271]
+layout_mode = 2
+size_flags_horizontal = 0
+size_flags_vertical = 0
+text = "Epic Battle by FSCM Productions
+https://fscmproductions.bandcamp.com
+Music promoted by free-stock-music.com
+CC BY 4.0
+https://creativecommons.org/licenses/by/4.0/
+
+"
+
+[node name="AssetsCredits" type="Label" parent="PanelContainer/MarginContainer/VBoxContainer" unique_id=2072944425]
+layout_mode = 2
+size_flags_horizontal = 0
+text = "Art:
+2D Pixel Dungeon Asset Pack by Pixel_Poem
+Source: https://pixel-poem.itch.io/dungeon-assetpuck
+Used with permission under the asset page terms for free/commercial projects.
+Credit appreciated by the author.
+
+"
+
+[node name="Button" type="Button" parent="PanelContainer/MarginContainer/VBoxContainer" unique_id=408309128]
+layout_mode = 2
+text = "Return"
+
+[connection signal="pressed" from="PanelContainer/MarginContainer/VBoxContainer/Button" to="." method="_on_button_pressed"]

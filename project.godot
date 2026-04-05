@@ -15,6 +15,10 @@ run/main_scene="uid://bcev5bg61mlwe"
 config/features=PackedStringArray("4.6", "GL Compatibility")
 config/icon="res://icon.svg"
 
+[autoload]
+
+BackgroundTrack="*uid://d1bk5pc5uvfdb"
+
 [global_group]
 
 boxes=""

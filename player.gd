@@ -10,6 +10,7 @@ extends Node2D
 @onready var left_collider: CollisionShape2D = $StaticBody2D/LeftCollider
 @onready var right_collider: CollisionShape2D = $StaticBody2D/RightCollider
 
+@onready var sprite_2d: Sprite2D = $Sprite2D
 
 var playerPos: Vector2 
 const UP = Vector2(0,-16)
@@ -55,6 +56,7 @@ func _physics_process(delta: float) -> void:
 		return
 		
 	if Input.is_action_just_pressed("ui_left") and !left.is_colliding() and can_move :
+		sprite_2d.flip_h = true
 		is_moving = true
 		right_collider.disabled = true
 		up_collider.disabled = true
@@ -65,6 +67,7 @@ func _physics_process(delta: float) -> void:
 		return
 	
 	if Input.is_action_just_pressed("ui_right") and !right.is_colliding() and can_move:
+		sprite_2d.flip_h = false
 		is_moving = true
 		left_collider.disabled = true
 		right_collider.disabled = false
@@ -76,4 +79,4 @@ func _physics_process(delta: float) -> void:
 
 
 func _on_box_move_back(direction):
-	self.position += direction/2
+	self.position += direction

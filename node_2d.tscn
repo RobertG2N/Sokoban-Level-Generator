@@ -4,7 +4,9 @@
 [ext_resource type="Texture2D" uid="uid://b1tvmaumpnc5u" path="res://2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Tileset.png" id="1_wtcfe"]
 [ext_resource type="PackedScene" uid="uid://b6vfn63n64iid" path="res://player.tscn" id="2_epypp"]
 [ext_resource type="PackedScene" uid="uid://cftwbhv6jeqbr" path="res://box.tscn" id="2_q6r6c"]
+[ext_resource type="PackedScene" uid="uid://dndj4kp455dmc" path="res://credits_menu.tscn" id="3_nr8wp"]
 [ext_resource type="Script" uid="uid://r70awwwr1qqb" path="res://tile_map.gd" id="3_q6r6c"]
+[ext_resource type="PackedScene" uid="uid://bcmfbsfvrslu6" path="res://goal_area.tscn" id="4_d2bti"]
 [ext_resource type="Texture2D" uid="uid://lqmksukfll8l" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_1.png" id="6_d21ai"]
 [ext_resource type="Texture2D" uid="uid://n2vytvkonaln" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_3.png" id="7_rj586"]
 [ext_resource type="Texture2D" uid="uid://c5nnuua36d4xk" path="res://2D Pixel Dungeon Asset Pack/Dungeon_Tileset_at.png" id="8_x0ka3"]
@@ -12,6 +14,8 @@
 [ext_resource type="Texture2D" uid="uid://cjeqrsh3wg8qc" path="res://2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton2/v1/skeleton2_v1_2.png" id="10_nr8wp"]
 [ext_resource type="Texture2D" uid="uid://dltdlqw5hb8hs" path="res://2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton2/v1/skeleton2_v1_3.png" id="11_d2bti"]
 [ext_resource type="Texture2D" uid="uid://dw8ypt4rf0a8m" path="res://2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton2/v1/skeleton2_v1_4.png" id="12_ta5nu"]
+[ext_resource type="Texture2D" uid="uid://i4usd83ogcld" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_4.png" id="13_0h7mo"]
+[ext_resource type="Texture2D" uid="uid://b16blbkikvoyg" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/coin/coin_1.png" id="16_ta5nu"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0e48y"]
 texture = ExtResource("1_wtcfe")
@@ -180,9 +184,12 @@ animations = [{
 [sub_resource type="AtlasTexture" id="AtlasTexture_x0ka3"]
 atlas = ExtResource("8_x0ka3")
 
-[node name="GameManager" type="Node2D" unique_id=397004167]
+[node name="GameManager" type="Node2D" unique_id=397004167 node_paths=PackedStringArray("victory_label")]
 script = ExtResource("1_0hol4")
+victory_label = NodePath("VictoryLabel")
 box_scene = ExtResource("2_q6r6c")
+credit_scene = ExtResource("3_nr8wp")
+goal_area_scene = ExtResource("4_d2bti")
 
 [node name="TileMap" type="TileMap" parent="." unique_id=2013324322]
 tile_set = SubResource("TileSet_epypp")
@@ -252,5 +259,59 @@ position = Vector2(590, 295.5)
 scale = Vector2(0.74609363, 0.41992185)
 texture = SubResource("AtlasTexture_x0ka3")
 
+[node name="Credits" type="Button" parent="." unique_id=142320004]
+offset_left = 717.0
+offset_top = 193.00002
+offset_right = 800.0
+offset_bottom = 224.00002
+scale = Vector2(0.61371833, 0.49020082)
+text = "Credits"
+icon = ExtResource("13_0h7mo")
+
+[node name="VictoryLabel" type="Label" parent="." unique_id=2031312896]
+visible = false
+z_index = 20
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = 560.0
+offset_top = 245.0
+offset_right = 623.0
+offset_bottom = 268.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "Victory!!"
+
+[node name="IncreaseGoals" type="Button" parent="." unique_id=978226895]
+offset_left = 560.00006
+offset_top = 196.00002
+offset_right = 718.00006
+offset_bottom = 227.00002
+scale = Vector2(0.31851405, 0.34602153)
+text = "Increase Boxes +"
+icon = ExtResource("16_ta5nu")
+
+[node name="DecreaseGoals" type="Button" parent="." unique_id=157454888]
+offset_left = 614.00006
+offset_top = 196.0
+offset_right = 773.00006
+offset_bottom = 227.0
+scale = Vector2(0.30566192, 0.3609943)
+text = "Decrease Boxes -"
+icon = ExtResource("16_ta5nu")
+
+[node name="GoalsLabel" type="Label" parent="." unique_id=113068631]
+offset_left = 667.0
+offset_top = 196.00002
+offset_right = 731.0
+offset_bottom = 219.00002
+scale = Vector2(0.7049603, 0.53764385)
+text = "Boxes: 0"
+
 [connection signal="pressed" from="RetryLevel" to="." method="_on_retry_level_pressed"]
 [connection signal="pressed" from="NewLevel" to="." method="_on_new_level_pressed"]
+[connection signal="pressed" from="Credits" to="." method="_on_credits_pressed"]
+[connection signal="pressed" from="IncreaseGoals" to="." method="_on_increase_goals_pressed"]
+[connection signal="pressed" from="DecreaseGoals" to="." method="_on_decrease_goals_pressed"]

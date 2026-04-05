@@ -7,7 +7,14 @@ extends Node2D
 @onready var fake_loading_screen: Sprite2D = $FakeLoadingScreen
 @onready var animated_sprite_2d: AnimatedSprite2D = $AnimatedSprite2D
 @onready var label: Label = $Label
+@export var victory_label: Label
+@onready var increase_goals_button: Button = $IncreaseGoals
+@onready var decrease_goals_button: Button = $DecreaseGoals
+@onready var goals_label: Label = $GoalsLabel
 
+
+signal on_goal(box)
+signal left_goal(box)
 
 var width = 15
 var height = 12
@@ -27,6 +34,10 @@ var reachable_cells: Dictionary = {}
 var current_seed: int = 0
 
 @export var box_scene: PackedScene
+@export var credit_scene: PackedScene
+@export var goal_area_scene: PackedScene
+
+var goal_area_list = []
 
 class State:
 	var boxes: Array
@@ -41,15 +52,22 @@ class State:
 var samples = []
 var patterns = []
 var adjacency = {}
-var nr_of_goals = 2
+const SAVE_PATH := "user://save_file.tres"
+var nr_of_goals: SaveData
 var layouts: Layouts = load("res://layouts.tres")
 var reverse_thread: Thread
 var reverse_running := false
+var boxes_on_goals: int = 0
+var dfs_complete: bool = false
+
 
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:  
 	await get_tree().physics_frame
 	randomize()
+	
+	load_save_data()
+	
 	current_seed = randi()
 	samples = [layouts.layout1, layouts.layout2]
 	patterns = extract_patterns(samples, 3)
@@ -58,14 +76,48 @@ func _ready() -> void:
 	
 	seed(current_seed)
 	generate_level(width, height)
+	update_goals_label()
+
+func _process(delta: float) -> void:
+	if nr_of_goals == null:
+		return
+
+	if boxes_on_goals < 0 or boxes_on_goals > nr_of_goals.goals:
+		boxes_on_goals = 0
+
+	if dfs_complete:
+		check_level_complete()
+
+func load_save_data() -> void:
+	if ResourceLoader.exists(SAVE_PATH):
+		nr_of_goals = ResourceLoader.load(SAVE_PATH, "", ResourceLoader.CACHE_MODE_IGNORE) as SaveData
+
+	if nr_of_goals == null:
+		nr_of_goals = SaveData.new()
+		nr_of_goals.goals = 2
+		save_save_data()
+
+	nr_of_goals.goals = clamp(nr_of_goals.goals, 1, 4)
+
+func save_save_data() -> void:
+	var err = ResourceSaver.save(nr_of_goals, SAVE_PATH)
+	print("save err = ", err)
+	print("save path = ", ProjectSettings.globalize_path(SAVE_PATH))
 
 func generate_level(w: int, h: int) -> void:
 	set_generation_buttons_enabled(false)
 	display_fake_loading_screen(true)
+	dfs_complete = false
+	victory_label.visible = false
+	boxes_on_goals = 0
 	width = w
 	height = h
 
 	box_list.clear()
+	for area in goal_area_list:
+		if is_instance_valid(area):
+			area.queue_free()
+	goal_area_list.clear()
 	for child in get_children():
 		if child.is_in_group("boxes"):
 			child.queue_free()
@@ -84,7 +136,7 @@ func generate_level(w: int, h: int) -> void:
 		if not is_layout_connected(layout):
 			continue
 
-		layout = place_goals(layout, nr_of_goals)
+		layout = place_goals(layout, nr_of_goals.goals)
 		if layout.is_empty():
 			continue
 
@@ -112,6 +164,7 @@ func generate_level(w: int, h: int) -> void:
 				2:
 					tile_map.set_cell(0, tile_coords, source_id, goal_tile)
 					spawn_box(tile_coords)
+					spawn_goal_area(tile_coords)
 
 	place_player()
 	_start_reverse_thread(layout.duplicate(true))
@@ -119,7 +172,7 @@ func generate_level(w: int, h: int) -> void:
 
 func retry_level() -> void:
 	seed(current_seed)
-	await generate_level(width, height)
+	generate_level(width, height)
 
 
 func spawn_box(pos: Vector2i):
@@ -134,6 +187,38 @@ func spawn_box(pos: Vector2i):
 	print(tile_local_pos)
 	print(tile_map.local_to_map(box.position))
 	print()
+
+func spawn_goal_area(cell: Vector2i) -> void:
+	var area = goal_area_scene.instantiate()
+	area.cell = cell
+	area.position = grid_to_world_pos(cell)
+	area.body_entered.connect(_on_goal_area_body_entered.bind(area, cell))
+	area.body_exited.connect(_on_goal_area_body_exited.bind(area, cell))
+	add_child(area)
+	goal_area_list.append(area)
+
+func _on_goal_area_body_entered(body: Node, area: Area2D, cell: Vector2i) -> void:
+	emit_signal("on_goal", body)
+	if not dfs_complete:
+		return
+	boxes_on_goals += 1
+	print("box on goal")
+	print(boxes_on_goals)
+
+func _on_goal_area_body_exited(body: Node, area: Area2D, cell: Vector2i) -> void:
+	emit_signal("left_goal", body)
+	if not dfs_complete:
+		return
+	boxes_on_goals -= 1
+	print(boxes_on_goals)
+
+
+func check_level_complete() -> void:
+	victory_label.visible = (boxes_on_goals == nr_of_goals.goals)
+
+func update_goals_label() -> void:
+	goals_label.text = "Boxes: " + str(nr_of_goals.goals)
+
 
 func is_wall_in_layout(layout: Array, cell: Vector2i) -> bool:
 	var local = cell - start
@@ -323,6 +408,10 @@ func _apply_reverse_result(result: Dictionary) -> void:
 		box_list[i].position = grid_to_world_pos(result["boxes"][i])
 
 	player.position = grid_to_world_pos(result["player"])
+	
+	boxes_on_goals = 0
+	dfs_complete = true
+	check_level_complete()
 
 	print("final reverse depth = ", result["depth"])
 	print("final score = ", result["score"])
@@ -774,6 +863,10 @@ func display_fake_loading_screen(display: bool) -> void:
 	else: animated_sprite_2d.stop()
 	label.visible = display
 
+func on_credits_pressed():
+	var credits = credit_scene.instantiate()
+	add_child(credits)
+
 func _on_retry_level_pressed() -> void:
 	if reverse_running:
 		return
@@ -784,3 +877,23 @@ func _on_new_level_pressed() -> void:
 	if reverse_running:
 		return
 	get_tree().reload_current_scene()
+
+
+func _on_credits_pressed() -> void:
+	on_credits_pressed()
+
+
+func _on_increase_goals_pressed() -> void:
+	if reverse_running:
+		return
+	nr_of_goals.goals = clamp(nr_of_goals.goals + 1, 1, 4)
+	update_goals_label()
+	save_save_data()
+
+
+func _on_decrease_goals_pressed() -> void:
+	if reverse_running:
+		return
+	nr_of_goals.goals  = clamp(nr_of_goals.goals - 1, 1, 4)
+	update_goals_label()
+	save_save_data()
