@@ -17,6 +17,7 @@
 [ext_resource type="Texture2D" uid="uid://i4usd83ogcld" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_4.png" id="13_0h7mo"]
 [ext_resource type="Texture2D" uid="uid://b16blbkikvoyg" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/coin/coin_1.png" id="16_ta5nu"]
 [ext_resource type="AudioStream" uid="uid://c7oeemntma0j8" path="res://i-just-hit-the-jackpot.mp3" id="17_flf07"]
+[ext_resource type="Texture2D" uid="uid://dlwnhxlgcpd5u" path="res://2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Character_2.png" id="18_k73cj"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0e48y"]
 texture = ExtResource("1_wtcfe")
@@ -185,6 +186,22 @@ animations = [{
 [sub_resource type="AtlasTexture" id="AtlasTexture_x0ka3"]
 atlas = ExtResource("8_x0ka3")
 
+[sub_resource type="AtlasTexture" id="AtlasTexture_k73cj"]
+atlas = ExtResource("1_wtcfe")
+region = Rect2(17, 17, 62, 46)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_rjqkl"]
+atlas = ExtResource("18_k73cj")
+region = Rect2(0, 17, 16, 15)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_fs4d3"]
+atlas = ExtResource("18_k73cj")
+region = Rect2(16, 17, 15, 15)
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_7vxoj"]
+atlas = ExtResource("18_k73cj")
+region = Rect2(96, 16, 16, 16)
+
 [node name="GameManager" type="Node2D" unique_id=397004167 node_paths=PackedStringArray("victory_label")]
 script = ExtResource("1_0hol4")
 victory_label = NodePath("VictoryLabel")
@@ -231,7 +248,7 @@ icon = ExtResource("7_rj586")
 
 [node name="FakeLoadingScreen" type="Sprite2D" parent="." unique_id=1171743723]
 visible = false
-z_index = 10
+z_index = 11
 position = Vector2(590, 295.5)
 scale = Vector2(0.74609375, 0.41992188)
 texture = SubResource("AtlasTexture_flf07")
@@ -315,8 +332,50 @@ text = "Boxes: 0"
 stream = ExtResource("17_flf07")
 volume_db = -3.628
 
+[node name="InstructionsSprite" type="Sprite2D" parent="." unique_id=976032901]
+z_index = 9
+position = Vector2(431.5, 304)
+scale = Vector2(1.0483872, 4.1739135)
+texture = SubResource("AtlasTexture_k73cj")
+
+[node name="InstructionsLabel" type="Label" parent="." unique_id=10867175]
+z_index = 10
+offset_left = 407.99997
+offset_top = 272.0
+offset_right = 588.0
+offset_bottom = 503.0
+scale = Vector2(0.73624074, 0.51824)
+text = "Use 
+
+UP/
+DOWN/
+LEFT/
+RIGHT 
+
+Arrows 
+To move"
+
+[node name="Difficulties" type="OptionButton" parent="." unique_id=109988676]
+z_index = 10
+offset_left = 400.0
+offset_top = 216.0
+offset_right = 533.33466
+offset_bottom = 247.0
+scale = Vector2(0.47999513, 1)
+item_count = 3
+popup/item_0/text = "Easy"
+popup/item_0/icon = SubResource("AtlasTexture_rjqkl")
+popup/item_0/id = 0
+popup/item_1/text = "Medium"
+popup/item_1/icon = SubResource("AtlasTexture_fs4d3")
+popup/item_1/id = 1
+popup/item_2/text = "Hard"
+popup/item_2/icon = SubResource("AtlasTexture_7vxoj")
+popup/item_2/id = 2
+
 [connection signal="pressed" from="RetryLevel" to="." method="_on_retry_level_pressed"]
 [connection signal="pressed" from="NewLevel" to="." method="_on_new_level_pressed"]
 [connection signal="pressed" from="Credits" to="." method="_on_credits_pressed"]
 [connection signal="pressed" from="IncreaseGoals" to="." method="_on_increase_goals_pressed"]
 [connection signal="pressed" from="DecreaseGoals" to="." method="_on_decrease_goals_pressed"]
+[connection signal="item_selected" from="Difficulties" to="." method="_on_difficulties_item_selected"]

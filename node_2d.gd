@@ -20,7 +20,7 @@ var victory_track_volume: float = 0.2
 var reverse_cancel := false
 var quit_requested := false
 
-const PATTERN_SIZE := 4
+const PATTERN_SIZE := 3
 var pattern_weights: Array = []
 
 signal on_goal(box)
@@ -49,6 +49,14 @@ var current_seed: int = 0
 
 var goal_area_list = []
 
+@onready var difficulties: OptionButton = $Difficulties
+
+enum Difficulty {
+	EASY,
+	MEDIUM,
+	HARD
+}
+
 class State:
 	var boxes: Array
 	var box_lookup: Dictionary
@@ -71,7 +79,9 @@ var samples = []
 var patterns = []
 var adjacency = {}
 const SAVE_PATH := "user://save_file.tres"
-var nr_of_goals: SaveData
+const WFC_STAGE_SALT: int = 1482041217
+const DFS_STAGE_SALT: int = 925611173
+var save_data: SaveData
 var layouts: Layouts = load("res://layouts.tres")
 var reverse_thread: Thread
 var reverse_running := false
@@ -84,11 +94,14 @@ var dfs_complete: bool = false
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:  
 	await get_tree().physics_frame
-	randomize()
 	BackgroundTrack.volume_linear = background_track_volume
 	load_save_data()
 	
-	current_seed = randi()
+	difficulties.select(save_data.difficulty)
+	
+	var seed_rng := RandomNumberGenerator.new()
+	seed_rng.randomize()
+	current_seed = int(seed_rng.randi())
 	samples = [
 	layouts.layout1, layouts.layout2, layouts.layout3, layouts.layout4, layouts.layout5,
 	layouts.layout6, layouts.layout7, layouts.layout8]
@@ -101,15 +114,14 @@ func _ready() -> void:
 	print("unique patterns found: ", patterns.size())
 	adjacency = build_adjacency(patterns, PATTERN_SIZE)
 	
-	seed(current_seed)
 	generate_level(width, height)
 	update_goals_label()
 
 func _process(delta: float) -> void:
-	if nr_of_goals == null:
+	if save_data == null:
 		return
 
-	if boxes_on_goals < 0 or boxes_on_goals > nr_of_goals.goals:
+	if boxes_on_goals < 0 or boxes_on_goals > save_data.goals:
 		boxes_on_goals = 0
 
 	if dfs_complete:
@@ -117,19 +129,43 @@ func _process(delta: float) -> void:
 
 func load_save_data() -> void:
 	if ResourceLoader.exists(SAVE_PATH):
-		nr_of_goals = ResourceLoader.load(SAVE_PATH, "", ResourceLoader.CACHE_MODE_IGNORE) as SaveData
+		save_data = ResourceLoader.load(SAVE_PATH, "", ResourceLoader.CACHE_MODE_IGNORE) as SaveData
 
-	if nr_of_goals == null:
-		nr_of_goals = SaveData.new()
-		nr_of_goals.goals = 2
+	if save_data == null:
+		save_data = SaveData.new()
+		save_data.goals = 2
+		save_data.difficulty = 1
 		save_save_data()
 
-	nr_of_goals.goals = clamp(nr_of_goals.goals, 1, 4)
+	save_data.goals = clamp(save_data.goals, 1, 4)
 
 func save_save_data() -> void:
-	var err = ResourceSaver.save(nr_of_goals, SAVE_PATH)
+	var err = ResourceSaver.save(save_data, SAVE_PATH)
 	print("save err = ", err)
 	print("save path = ", ProjectSettings.globalize_path(SAVE_PATH))
+
+func get_difficulty_settings() -> Dictionary:
+	match save_data.difficulty:
+		Difficulty.EASY:
+			return {
+				"max_depth": 8,
+				"max_nodes": 5000
+			}
+		Difficulty.MEDIUM:
+			return {
+				"max_depth": 14,
+				"max_nodes": 5000
+			}
+		Difficulty.HARD:
+			return {
+				"max_depth": 20,
+				"max_nodes": 5000
+			}
+		_:
+			return {
+				"max_depth": 14,
+				"max_nodes": 5000
+			}
 
 func generate_level(w: int, h: int) -> void:
 	if wfc_running or reverse_running:
@@ -158,7 +194,6 @@ func generate_level(w: int, h: int) -> void:
 
 
 func retry_level() -> void:
-	seed(current_seed)
 	generate_level(width, height)
 	audio_stream_player.stop()
 	BackgroundTrack.volume_linear = background_track_volume
@@ -203,7 +238,7 @@ func _on_goal_area_body_exited(body: Node, area: Area2D, cell: Vector2i) -> void
 
 
 func check_level_complete() -> void:
-	var complete = (boxes_on_goals == nr_of_goals.goals)
+	var complete = (boxes_on_goals == save_data.goals)
 	victory_label.visible = complete
 
 	if complete and not level_complete_triggered:
@@ -214,7 +249,25 @@ func check_level_complete() -> void:
 
 
 func update_goals_label() -> void:
-	goals_label.text = "Boxes: " + str(nr_of_goals.goals)
+	goals_label.text = "Boxes: " + str(save_data.goals)
+
+func _make_stage_seed(base_seed: int, salt: int) -> int:
+	var mixed: int = abs(base_seed * 1664525 + salt * 1013904223 + 12345)
+	if mixed == 0:
+		mixed = salt + 1
+	return mixed
+
+func _make_rng_from_seed(seed_value: int) -> RandomNumberGenerator:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value
+	return rng
+
+func shuffle_with_rng(items: Array, rng: RandomNumberGenerator) -> void:
+	for i in range(items.size() - 1, 0, -1):
+		var j: int = rng.randi_range(0, i)
+		var temp = items[i]
+		items[i] = items[j]
+		items[j] = temp
 
 
 func is_wall_in_layout(layout: Array, cell: Vector2i) -> bool:
@@ -378,8 +431,11 @@ func _dfs_generate_full_thread(
 	layout: Array,
 	reachable_lookup: Dictionary,
 	max_depth: int,
-	max_nodes: int = 5000
+	max_nodes: int = 5000,
+	rng: RandomNumberGenerator = null
 ) -> Dictionary:
+	if rng == null:
+		rng = _make_rng_from_seed(_make_stage_seed(current_seed, DFS_STAGE_SALT))
 	var start_state = State.new(initial_boxes, initial_player, 0)
 	var stack: Array = [start_state]
 	var visited: Dictionary = {}
@@ -412,7 +468,7 @@ func _dfs_generate_full_thread(
 		var box_indices: Array = []
 		for i in range(state.boxes.size()):
 			box_indices.append(i)
-		box_indices.shuffle()
+		shuffle_with_rng(box_indices, rng)
 
 		for box_idx in box_indices:
 			if reverse_cancel:
@@ -425,7 +481,7 @@ func _dfs_generate_full_thread(
 				return {"cancelled": true}
 
 			var dir_list = dirs.duplicate()
-			dir_list.shuffle()
+			shuffle_with_rng(dir_list, rng)
 
 			for dir in dir_list:
 				if reverse_cancel:
@@ -506,6 +562,7 @@ func _start_wfc_thread(w: int, h: int, max_attempts: int = 100) -> void:
 	reverse_cancel = false
 	quit_requested = false
 	wfc_running = true
+	var wfc_seed: int = _make_stage_seed(current_seed, WFC_STAGE_SALT)
 	wfc_thread = Thread.new()
 	wfc_thread.start(
 		_thread_wfc_job.bind(
@@ -514,8 +571,9 @@ func _start_wfc_thread(w: int, h: int, max_attempts: int = 100) -> void:
 			patterns.duplicate(true),
 			adjacency.duplicate(true),
 			pattern_weights.duplicate(true),
-			nr_of_goals.goals,
-			max_attempts
+			save_data.goals,
+			max_attempts,
+			wfc_seed
 		)
 	)
 
@@ -526,7 +584,8 @@ func _thread_wfc_job(
 	adjacency_snapshot: Dictionary,
 	weights_snapshot: Array,
 	goal_count: int,
-	max_attempts: int
+	max_attempts: int,
+	wfc_seed: int
 ) -> void:
 	var result = _generate_layout_thread(
 		w,
@@ -535,7 +594,8 @@ func _thread_wfc_job(
 		adjacency_snapshot,
 		weights_snapshot,
 		goal_count,
-		max_attempts
+		max_attempts,
+		wfc_seed
 	)
 	call_deferred("_apply_wfc_result", result)
 
@@ -546,9 +606,11 @@ func _generate_layout_thread(
 	adjacency_snapshot: Dictionary,
 	weights_snapshot: Array,
 	goal_count: int,
-	max_attempts: int = 100
+	max_attempts: int = 100,
+	wfc_seed: int = 1
 ) -> Dictionary:
 	var attempts := 0
+	var rng := _make_rng_from_seed(wfc_seed)
 	var inner_w: int = max(1, w - 2)
 	var inner_h: int = max(1, h - 2)
 
@@ -558,7 +620,7 @@ func _generate_layout_thread(
 
 		attempts += 1
 
-		var inner_layout = run_wfc(inner_w, inner_h, patterns_snapshot, adjacency_snapshot, weights_snapshot)
+		var inner_layout = run_wfc(inner_w, inner_h, patterns_snapshot, adjacency_snapshot, weights_snapshot, rng)
 		if reverse_cancel:
 			return {"cancelled": true}
 		if inner_layout.is_empty():
@@ -570,7 +632,7 @@ func _generate_layout_thread(
 		if not is_layout_connected(layout):
 			continue
 
-		layout = place_goals(layout, goal_count)
+		layout = place_goals(layout, goal_count, rng)
 		if reverse_cancel:
 			return {"cancelled": true}
 		if layout.is_empty():
@@ -641,7 +703,8 @@ func _apply_wfc_result(result: Dictionary) -> void:
 					spawn_goal_area(tile_coords)
 
 	place_player()
-	_start_reverse_thread(layout.duplicate(true))
+	var settings = get_difficulty_settings()
+	_start_reverse_thread(layout.duplicate(true), settings["max_depth"], settings["max_nodes"])
 
 func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 5000) -> void:
 	if reverse_running:
@@ -657,6 +720,7 @@ func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 
 	reverse_cancel = false
 	quit_requested = false
 	reverse_running = true
+	var dfs_seed: int = _make_stage_seed(current_seed, DFS_STAGE_SALT)
 	reverse_thread = Thread.new()
 	reverse_thread.start(
 		_thread_reverse_job.bind(
@@ -665,7 +729,8 @@ func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 
 			layout.duplicate(true),
 			reachable_snapshot,
 			max_depth,
-			max_nodes
+			max_nodes,
+			dfs_seed
 		)
 	)
 
@@ -675,7 +740,8 @@ func _thread_reverse_job(
 	layout: Array,
 	reachable_lookup: Dictionary,
 	max_depth: int,
-	max_nodes: int
+	max_nodes: int,
+	dfs_seed: int
 ) -> void:
 	var result = _dfs_generate_full_thread(
 		box_snapshot,
@@ -683,7 +749,8 @@ func _thread_reverse_job(
 		layout,
 		reachable_lookup,
 		max_depth,
-		max_nodes
+		max_nodes,
+		_make_rng_from_seed(dfs_seed)
 	)
 	call_deferred("_apply_reverse_result", result)
 
@@ -859,7 +926,9 @@ func is_layout_connected(layout: Array) -> bool:
 			open.append(nxt)
 	return visited.size() == floor_count
 
-func place_goals(layout: Array, num_goals: int) -> Array:
+func place_goals(layout: Array, num_goals: int, rng: RandomNumberGenerator = null) -> Array:
+	if rng == null:
+		rng = _make_rng_from_seed(_make_stage_seed(current_seed, WFC_STAGE_SALT))
 	var floor_count: int = count_floor_cells(layout)
 	var candidates: Array = []
 	var min_reach: int = max(8, int(floor_count * 0.18))
@@ -892,11 +961,11 @@ func place_goals(layout: Array, num_goals: int) -> Array:
 	if candidates.size() < num_goals:
 		return []
 
-	candidates.shuffle()
+	shuffle_with_rng(candidates, rng)
 	candidates.sort_custom(func(a, b): return a["score"] > b["score"])
 
 	var top_n: int = min(10, candidates.size())
-	var seed_index: int = randi() % top_n
+	var seed_index: int = rng.randi_range(0, top_n - 1)
 	var seed: Dictionary = candidates[seed_index]
 
 	var seed_cell: Vector2i = seed["cell"]
@@ -920,7 +989,7 @@ func place_goals(layout: Array, num_goals: int) -> Array:
 		if core.has(item_cell):
 			pool.append(item)
 
-	pool.shuffle()
+	shuffle_with_rng(pool, rng)
 	pool.sort_custom(func(a, b): return a["score"] > b["score"])
 
 	for item in pool:
@@ -1027,16 +1096,16 @@ func init_wfc(w: int, h: int, num_patterns: int) -> Array:
 		wfc_grid.append(row)
 	return wfc_grid
 
-func weighted_random_choice(candidates: Array, weights: Array) -> int:
+func weighted_random_choice(candidates: Array, weights: Array, rng: RandomNumberGenerator) -> int:
 	var total := 0.0
 
 	for pattern_idx in candidates:
 		total += float(weights[pattern_idx])
 
 	if total <= 0.0:
-		return candidates[randi() % candidates.size()]
+		return candidates[rng.randi_range(0, candidates.size() - 1)]
 
-	var roll := randf() * total
+	var roll := rng.randf() * total
 	var running := 0.0
 
 	for pattern_idx in candidates:
@@ -1062,7 +1131,7 @@ func cell_entropy(candidates: Array, weights: Array) -> float:
 
 	return log(sum_w) - (sum_w_log_w / sum_w)
 
-func get_lowest_entropy_cell(wfc_grid: Array, weights: Array) -> Vector2i:
+func get_lowest_entropy_cell(wfc_grid: Array, weights: Array, rng: RandomNumberGenerator) -> Vector2i:
 	var best_entropy := 1.0e20
 	var best_cell := Vector2i(-1, -1)
 
@@ -1074,7 +1143,7 @@ func get_lowest_entropy_cell(wfc_grid: Array, weights: Array) -> Vector2i:
 				continue
 
 			var entropy := cell_entropy(candidates, weights)
-			entropy += randf() * 0.000001
+			entropy += rng.randf() * 0.000001
 
 			if entropy < best_entropy:
 				best_entropy = entropy
@@ -1082,9 +1151,9 @@ func get_lowest_entropy_cell(wfc_grid: Array, weights: Array) -> Vector2i:
 
 	return best_cell
 
-func collapse_cell(wfc_grid: Array, cell: Vector2i, weights: Array) -> void:
+func collapse_cell(wfc_grid: Array, cell: Vector2i, weights: Array, rng: RandomNumberGenerator) -> void:
 	var candidates: Array = wfc_grid[cell.y][cell.x]
-	var chosen := weighted_random_choice(candidates, weights)
+	var chosen := weighted_random_choice(candidates, weights, rng)
 	wfc_grid[cell.y][cell.x] = [chosen]
 
 func propagate(wfc_grid: Array, adjacency: Dictionary, start_cell: Vector2i) -> bool:
@@ -1142,6 +1211,7 @@ func run_wfc(
 	patterns: Array,
 	adjacency: Dictionary,
 	weights: Array,
+	rng: RandomNumberGenerator,
 	max_restarts: int = 32
 ) -> Array:
 	for attempt in range(max_restarts):
@@ -1155,7 +1225,7 @@ func run_wfc(
 			if reverse_cancel:
 				return []
 
-			var cell = get_lowest_entropy_cell(wfc_grid, weights)
+			var cell = get_lowest_entropy_cell(wfc_grid, weights, rng)
 
 			if cell == Vector2i(-1, -1):
 				var layout: Array = []
@@ -1169,7 +1239,7 @@ func run_wfc(
 
 				return layout
 
-			collapse_cell(wfc_grid, cell, weights)
+			collapse_cell(wfc_grid, cell, weights, rng)
 
 			if not propagate(wfc_grid, adjacency, cell):
 				if reverse_cancel:
@@ -1821,7 +1891,7 @@ func _on_credits_pressed() -> void:
 func _on_increase_goals_pressed() -> void:
 	if reverse_running:
 		return
-	nr_of_goals.goals = clamp(nr_of_goals.goals + 1, 1, 4)
+	save_data.goals = clamp(save_data.goals + 1, 1, 4)
 	update_goals_label()
 	save_save_data()
 
@@ -1829,6 +1899,11 @@ func _on_increase_goals_pressed() -> void:
 func _on_decrease_goals_pressed() -> void:
 	if reverse_running:
 		return
-	nr_of_goals.goals  = clamp(nr_of_goals.goals - 1, 1, 4)
+	save_data.goals  = clamp(save_data.goals - 1, 1, 4)
 	update_goals_label()
+	save_save_data()
+
+
+func _on_difficulties_item_selected(index: int) -> void:
+	save_data.difficulty = difficulties.get_item_id(index)
 	save_save_data()
