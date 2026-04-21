@@ -17,13 +17,16 @@ var level_complete_triggered := false
 var background_track_volume: float = 0.07
 var victory_track_volume: float = 0.2
 
-const PATTERN_SIZE := 3
+var reverse_cancel := false
+var quit_requested := false
+
+const PATTERN_SIZE := 4
 var pattern_weights: Array = []
 
 signal on_goal(box)
 signal left_goal(box)
 
-var width = 17
+var width = 19
 var height = 12
 var floor_tile_atlas_coords = Vector2i(1,1)
 var start = Vector2i(29,13)
@@ -48,13 +51,21 @@ var goal_area_list = []
 
 class State:
 	var boxes: Array
+	var box_lookup: Dictionary
 	var player: Vector2i
 	var depth: int
 
-	func _init(b: Array, p: Vector2i, d: int):
-		boxes  = b.duplicate()
+	static func build_box_lookup(box_list: Array) -> Dictionary:
+		var lookup := {}
+		for cell in box_list:
+			lookup[cell] = true
+		return lookup
+
+	func _init(b: Array, p: Vector2i, d: int, lookup: Dictionary = {}):
+		boxes = b.duplicate()
+		box_lookup = lookup.duplicate() if not lookup.is_empty() else State.build_box_lookup(boxes)
 		player = p
-		depth  = d
+		depth = d
 
 var samples = []
 var patterns = []
@@ -64,6 +75,8 @@ var nr_of_goals: SaveData
 var layouts: Layouts = load("res://layouts.tres")
 var reverse_thread: Thread
 var reverse_running := false
+var wfc_thread: Thread
+var wfc_running := false
 var boxes_on_goals: int = 0
 var dfs_complete: bool = false
 
@@ -119,6 +132,9 @@ func save_save_data() -> void:
 	print("save path = ", ProjectSettings.globalize_path(SAVE_PATH))
 
 func generate_level(w: int, h: int) -> void:
+	if wfc_running or reverse_running:
+		return
+
 	level_complete_triggered = false
 	set_generation_buttons_enabled(false)
 	display_fake_loading_screen(true)
@@ -138,56 +154,7 @@ func generate_level(w: int, h: int) -> void:
 			child.queue_free()
 	tile_map.clear()
 
-	var layout: Array = []
-	var attempts := 0
-	var max_attempts := 100
-	var inner_w: int = max(1, width - 2)
-	var inner_h: int = max(1, height - 2)
-
-	while attempts < max_attempts:
-		attempts += 1
-
-		var inner_layout = run_wfc(inner_w, inner_h, patterns, adjacency, pattern_weights)
-		if inner_layout.is_empty():
-			continue
-
-		layout = add_border(inner_layout)
-
-		if not is_layout_connected(layout):
-			continue
-
-		layout = place_goals(layout, nr_of_goals.goals)
-		if layout.is_empty():
-			continue
-
-		reachable_cells = compute_reachable_cells(layout)
-		if reachable_cells.is_empty():
-			continue
-
-		break
-
-	if layout.is_empty():
-		push_error("Failed to generate a valid level after %d attempts" % max_attempts)
-		set_generation_buttons_enabled(true)
-		display_fake_loading_screen(false)
-		return
-
-	for y in range(height):
-		for x in range(width):
-			var tile_coords = Vector2i(start.x + x, start.y + y)
-
-			match layout[y][x]:
-				0:
-					tile_map.set_cell(0, tile_coords, source_id, floor_tile_atlas_coords)
-				1:
-					tile_map.set_cell(0, tile_coords, source_id, wall_tile_atlas_coords)
-				2:
-					tile_map.set_cell(0, tile_coords, source_id, goal_tile)
-					spawn_box(tile_coords)
-					spawn_goal_area(tile_coords)
-
-	place_player()
-	_start_reverse_thread(layout.duplicate(true))
+	_start_wfc_thread(w, h)
 
 
 func retry_level() -> void:
@@ -283,32 +250,105 @@ func set_generation_buttons_enabled(enabled: bool) -> void:
 	retry_button.disabled = not enabled
 	new_level_button.disabled = not enabled
 
-func _flood_layout(from: Vector2i, snapshot: Array, ignore_idx: int, layout: Array) -> Dictionary:
-	var open = [from]
-	var visited = {}
+func _flood_layout(from: Vector2i, snapshot: Array, ignore_idx: int, layout: Array, box_lookup: Dictionary = {}) -> Dictionary:
+	var open: Array = [from]
+	var head := 0
+	var visited := {}
 
-	while open.size() > 0:
-		var cur = open.pop_front()
+	while head < open.size():
+		if reverse_cancel:
+			return {}
+
+		var cur: Vector2i = open[head]
+		head += 1
+
 		if visited.has(cur):
 			continue
 		visited[cur] = true
 
 		for d in dirs:
-			var nxt = cur + d
+			if reverse_cancel:
+				return {}
+
+			var nxt: Vector2i = cur + d
 			if not in_bounds(nxt):
 				continue
 			if visited.has(nxt):
 				continue
 			if is_wall_in_layout(layout, nxt):
 				continue
-			if _snapshot_has_box(nxt, snapshot, ignore_idx):
+			if _snapshot_has_box(nxt, snapshot, ignore_idx, box_lookup):
 				continue
 			open.append(nxt)
 
 	return visited
 
-func _canonical_player_cell_layout(player_cell: Vector2i, boxes: Array, layout: Array) -> Vector2i:
-	var flood = _flood_layout(player_cell, boxes, -1, layout)
+func make_state_floods(state: State, layout: Array) -> Array:
+	var floods: Array = []
+	floods.resize(state.boxes.size())
+
+	for i in range(state.boxes.size()):
+		floods[i] = _flood_layout(state.player, state.boxes, i, layout)
+
+	return floods
+
+func make_deadlock_lookup(layout: Array) -> Dictionary:
+	var out := {}
+
+	for y in range(height):
+		for x in range(width):
+			var cell := Vector2i(start.x + x, start.y + y)
+			if is_deadlock_in_layout_world(layout, cell):
+				out[cell] = true
+
+	return out
+
+
+func total_reachable_pushes_from_floods(layout: Array, state: State, floods: Array) -> int:
+	var total := 0
+
+	for i in range(state.boxes.size()):
+		total += count_reachable_pushes_for_box(layout, state.boxes[i], state.boxes, floods[i], i)
+
+	return total
+
+
+func score_state_from_floods(state: State, goal_cells: Array, layout: Array, floods: Array) -> int:
+	var moved_boxes := 0
+	var total_distance := 0
+
+	for box_cell in state.boxes:
+		var on_goal := false
+		var best_dist := 999999
+
+		for goal_cell in goal_cells:
+			if box_cell == goal_cell:
+				on_goal = true
+
+			var dist = abs(box_cell.x - goal_cell.x) + abs(box_cell.y - goal_cell.y)
+			if dist < best_dist:
+				best_dist = dist
+
+		if not on_goal:
+			moved_boxes += 1
+
+		total_distance += best_dist
+
+	var reachable_pushes := total_reachable_pushes_from_floods(layout, state, floods)
+	var edge_penalty := count_edge_boxes(state.boxes)
+	var pair_penalty := count_adjacent_box_pairs(state.boxes)
+
+	return (
+		state.depth * 10000 +
+		moved_boxes * 2000 +
+		total_distance * 100 +
+		reachable_pushes * 250 -
+		edge_penalty * 250 -
+		pair_penalty * 200
+	)
+
+func _canonical_player_cell_layout(player_cell: Vector2i, boxes: Array, layout: Array, box_lookup: Dictionary = {}) -> Vector2i:
+	var flood = _flood_layout(player_cell, boxes, -1, layout, box_lookup)
 	var best = Vector2i(999999, 999999)
 
 	for cell in flood.keys():
@@ -317,16 +357,20 @@ func _canonical_player_cell_layout(player_cell: Vector2i, boxes: Array, layout: 
 
 	return best
 
-func _state_key_layout(boxes: Array, player_cell: Vector2i, layout: Array) -> String:
+func _state_key_layout(boxes: Array, player_cell: Vector2i, layout: Array, box_lookup: Dictionary = {}) -> String:
 	var sorted = boxes.duplicate()
 	sorted.sort_custom(func(a, b): return str(a) < str(b))
 
-	var canonical_player = _canonical_player_cell_layout(player_cell, boxes, layout)
+	var canonical_player = _canonical_player_cell_layout(player_cell, boxes, layout, box_lookup)
 
 	var s = str(canonical_player)
 	for box in sorted:
 		s += str(box)
 	return s
+
+func _cell_id(cell: Vector2i) -> int:
+	var local = cell - start
+	return local.y * width + local.x
 
 func _dfs_generate_full_thread(
 	initial_boxes: Array,
@@ -339,7 +383,7 @@ func _dfs_generate_full_thread(
 	var start_state = State.new(initial_boxes, initial_player, 0)
 	var stack: Array = [start_state]
 	var visited: Dictionary = {}
-	visited[_state_key_layout(start_state.boxes, start_state.player, layout)] = true
+	visited[_state_key_layout(start_state.boxes, start_state.player, layout, start_state.box_lookup)] = true
 
 	var goal_cells = initial_boxes.duplicate()
 	var best: State = start_state
@@ -348,6 +392,9 @@ func _dfs_generate_full_thread(
 	var nodes_expanded := 0
 
 	while stack.size() > 0:
+		if reverse_cancel:
+			return {"cancelled": true}
+
 		var state: State = stack.pop_back()
 		nodes_expanded += 1
 
@@ -368,13 +415,22 @@ func _dfs_generate_full_thread(
 		box_indices.shuffle()
 
 		for box_idx in box_indices:
+			if reverse_cancel:
+				return {"cancelled": true}
+
 			var box_cell: Vector2i = state.boxes[box_idx]
-			var flood = _flood_layout(state.player, state.boxes, box_idx, layout)
+			var flood = _flood_layout(state.player, state.boxes, box_idx, layout, state.box_lookup)
+
+			if reverse_cancel:
+				return {"cancelled": true}
 
 			var dir_list = dirs.duplicate()
 			dir_list.shuffle()
 
 			for dir in dir_list:
+				if reverse_cancel:
+					return {"cancelled": true}
+
 				var new_box: Vector2i = box_cell + dir
 				var req_player: Vector2i = box_cell - dir
 
@@ -388,9 +444,9 @@ func _dfs_generate_full_thread(
 				if is_wall_in_layout(layout, req_player):
 					continue
 
-				if _snapshot_has_box(new_box, state.boxes, box_idx):
+				if _snapshot_has_box(new_box, state.boxes, box_idx, state.box_lookup):
 					continue
-				if _snapshot_has_box(req_player, state.boxes, box_idx):
+				if _snapshot_has_box(req_player, state.boxes, box_idx, state.box_lookup):
 					continue
 
 				if is_deadlock_in_layout_world(layout, new_box):
@@ -405,18 +461,22 @@ func _dfs_generate_full_thread(
 
 				var new_boxes = state.boxes.duplicate()
 				new_boxes[box_idx] = new_box
+				var new_lookup = _move_box_lookup(state.box_lookup, box_cell, new_box)
 
-				if creates_2x2_lock(layout, new_boxes, new_box):
+				if creates_2x2_lock(layout, new_boxes, new_box, new_lookup):
 					continue
 
 				var next_player: Vector2i = box_cell
-				var next_flood = _flood_layout(next_player, new_boxes, box_idx, layout)
+				var next_flood = _flood_layout(next_player, new_boxes, box_idx, layout, new_lookup)
 
-				if not has_reachable_box_push(layout, new_box, new_boxes, next_flood, box_idx):
+				if reverse_cancel:
+					return {"cancelled": true}
+
+				if not has_reachable_box_push(layout, new_box, new_boxes, next_flood, box_idx, new_lookup):
 					continue
 
-				var next_state = State.new(new_boxes, next_player, state.depth + 1)
-				var k = _state_key_layout(next_state.boxes, next_state.player, layout)
+				var next_state = State.new(new_boxes, next_player, state.depth + 1, new_lookup)
+				var k = _state_key_layout(next_state.boxes, next_state.player, layout, next_state.box_lookup)
 
 				if visited.has(k):
 					continue
@@ -424,15 +484,164 @@ func _dfs_generate_full_thread(
 				visited[k] = true
 				stack.push_back(next_state)
 
-	var final_spawn = find_best_player_spawn(layout, best.boxes, best.player)
+	if reverse_cancel:
+		return {"cancelled": true}
+
+	var final_spawn = find_best_player_spawn(layout, best.boxes, best.player, best.box_lookup)
 
 	return {
 		"boxes": best.boxes,
 		"player": best.player,
 		"spawn_player": final_spawn,
 		"depth": best.depth,
-		"score": best_score
-}
+		"score": best_score,
+		"cancelled": false
+	}
+
+
+func _start_wfc_thread(w: int, h: int, max_attempts: int = 100) -> void:
+	if wfc_running or reverse_running:
+		return
+
+	reverse_cancel = false
+	quit_requested = false
+	wfc_running = true
+	wfc_thread = Thread.new()
+	wfc_thread.start(
+		_thread_wfc_job.bind(
+			w,
+			h,
+			patterns.duplicate(true),
+			adjacency.duplicate(true),
+			pattern_weights.duplicate(true),
+			nr_of_goals.goals,
+			max_attempts
+		)
+	)
+
+func _thread_wfc_job(
+	w: int,
+	h: int,
+	patterns_snapshot: Array,
+	adjacency_snapshot: Dictionary,
+	weights_snapshot: Array,
+	goal_count: int,
+	max_attempts: int
+) -> void:
+	var result = _generate_layout_thread(
+		w,
+		h,
+		patterns_snapshot,
+		adjacency_snapshot,
+		weights_snapshot,
+		goal_count,
+		max_attempts
+	)
+	call_deferred("_apply_wfc_result", result)
+
+func _generate_layout_thread(
+	w: int,
+	h: int,
+	patterns_snapshot: Array,
+	adjacency_snapshot: Dictionary,
+	weights_snapshot: Array,
+	goal_count: int,
+	max_attempts: int = 100
+) -> Dictionary:
+	var attempts := 0
+	var inner_w: int = max(1, w - 2)
+	var inner_h: int = max(1, h - 2)
+
+	while attempts < max_attempts:
+		if reverse_cancel:
+			return {"cancelled": true}
+
+		attempts += 1
+
+		var inner_layout = run_wfc(inner_w, inner_h, patterns_snapshot, adjacency_snapshot, weights_snapshot)
+		if reverse_cancel:
+			return {"cancelled": true}
+		if inner_layout.is_empty():
+			continue
+
+		var layout = add_border(inner_layout)
+		if reverse_cancel:
+			return {"cancelled": true}
+		if not is_layout_connected(layout):
+			continue
+
+		layout = place_goals(layout, goal_count)
+		if reverse_cancel:
+			return {"cancelled": true}
+		if layout.is_empty():
+			continue
+
+		var reachable = compute_reachable_cells(layout)
+		if reverse_cancel:
+			return {"cancelled": true}
+		if reachable.is_empty():
+			continue
+
+		return {
+			"cancelled": false,
+			"layout": layout,
+			"reachable": reachable,
+			"attempts": attempts
+		}
+
+	return {
+		"cancelled": false,
+		"layout": [],
+		"reachable": {},
+		"attempts": attempts
+	}
+
+func _apply_wfc_result(result: Dictionary) -> void:
+	wfc_running = false
+
+	if wfc_thread:
+		wfc_thread.wait_to_finish()
+		wfc_thread = null
+
+	if result.get("cancelled", false):
+		display_fake_loading_screen(false)
+		set_generation_buttons_enabled(true)
+
+		if quit_requested:
+			get_tree().quit()
+		return
+
+	if quit_requested:
+		display_fake_loading_screen(false)
+		set_generation_buttons_enabled(true)
+		get_tree().quit()
+		return
+
+	var layout: Array = result.get("layout", [])
+	if layout.is_empty():
+		push_error("Failed to generate a valid level after %d attempts" % int(result.get("attempts", 0)))
+		display_fake_loading_screen(false)
+		set_generation_buttons_enabled(true)
+		return
+
+	reachable_cells = result["reachable"]
+
+	for y in range(height):
+		for x in range(width):
+			var tile_coords = Vector2i(start.x + x, start.y + y)
+
+			match layout[y][x]:
+				0:
+					tile_map.set_cell(0, tile_coords, source_id, floor_tile_atlas_coords)
+				1:
+					tile_map.set_cell(0, tile_coords, source_id, wall_tile_atlas_coords)
+				2:
+					tile_map.set_cell(0, tile_coords, source_id, goal_tile)
+					spawn_box(tile_coords)
+					spawn_goal_area(tile_coords)
+
+	place_player()
+	_start_reverse_thread(layout.duplicate(true))
 
 func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 5000) -> void:
 	if reverse_running:
@@ -445,6 +654,8 @@ func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 
 	var player_cell: Vector2i = world_to_grid(player.position)
 	var reachable_snapshot: Dictionary = reachable_cells.duplicate(true)
 
+	reverse_cancel = false
+	quit_requested = false
 	reverse_running = true
 	reverse_thread = Thread.new()
 	reverse_thread.start(
@@ -477,12 +688,32 @@ func _thread_reverse_job(
 	call_deferred("_apply_reverse_result", result)
 
 func _apply_reverse_result(result: Dictionary) -> void:
+	reverse_running = false
+
+	if reverse_thread:
+		reverse_thread.wait_to_finish()
+		reverse_thread = null
+
+	if result.get("cancelled", false):
+		display_fake_loading_screen(false)
+		set_generation_buttons_enabled(true)
+
+		if quit_requested:
+			get_tree().quit()
+		return
+
+	if quit_requested:
+		display_fake_loading_screen(false)
+		set_generation_buttons_enabled(true)
+		get_tree().quit()
+		return
+
 	for i in range(box_list.size()):
 		box_list[i].position = grid_to_world_pos(result["boxes"][i])
 
 	player.position = grid_to_world_pos(result["spawn_player"])
 	player.position = player.position.round()
-	
+
 	boxes_on_goals = 0
 	dfs_complete = true
 	check_level_complete()
@@ -490,18 +721,28 @@ func _apply_reverse_result(result: Dictionary) -> void:
 	print("final reverse depth = ", result["depth"])
 	print("final score = ", result["score"])
 
-	reverse_running = false
+	display_fake_loading_screen(false)
+	set_generation_buttons_enabled(true)
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		if wfc_running or reverse_running:
+			reverse_cancel = true
+			quit_requested = true
+			return
+
+		get_tree().quit()
+
+func _exit_tree() -> void:
+	reverse_cancel = true
+
+	if wfc_thread:
+		wfc_thread.wait_to_finish()
+		wfc_thread = null
 
 	if reverse_thread:
 		reverse_thread.wait_to_finish()
 		reverse_thread = null
-	
-	display_fake_loading_screen(false)
-	set_generation_buttons_enabled(true)
-
-func _exit_tree() -> void:
-	if reverse_thread:
-		reverse_thread.wait_to_finish()
 
 func world_to_grid(pos: Vector2) -> Vector2i:
 	return tile_map.local_to_map(pos - tile_map.position)
@@ -563,7 +804,12 @@ func in_bounds(cell: Vector2i) -> bool:
 	cell.y < start.y + height
 	)
 
-func _snapshot_has_box(cell: Vector2i, snapshot: Array, ignore_idx: int) -> bool:
+func _snapshot_has_box(cell: Vector2i, snapshot: Array, ignore_idx: int, box_lookup: Dictionary = {}) -> bool:
+	if not box_lookup.is_empty():
+		if ignore_idx >= 0 and ignore_idx < snapshot.size() and snapshot[ignore_idx] == cell:
+			return false
+		return box_lookup.has(cell)
+
 	for i in range(snapshot.size()):
 		if i == ignore_idx:
 			continue
@@ -575,25 +821,34 @@ func _snapshot_has_box(cell: Vector2i, snapshot: Array, ignore_idx: int) -> bool
 func is_layout_connected(layout: Array) -> bool:
 	var start_cell = Vector2i(-1, -1)
 	var floor_count = 0
-	
+
 	for y in range(height):
+		if reverse_cancel:
+			return false
+
 		for x in range(width):
 			if layout[y][x] == 0:
 				floor_count += 1
 				if start_cell == Vector2i(-1, -1):
 					start_cell = Vector2i(x, y)
-					
+
 	if floor_count == 0:
 		return false
-	
+
 	var open = [start_cell]
 	var visited = {}
 	while open.size() > 0:
+		if reverse_cancel:
+			return false
+
 		var cur = open.pop_front()
 		if visited.has(cur):
 			continue
 		visited[cur] = true
 		for d in dirs:
+			if reverse_cancel:
+				return false
+
 			var nxt = cur + d
 			if nxt.x < 0 or nxt.x >= width or nxt.y < 0 or nxt.y >= height:
 				continue
@@ -610,13 +865,21 @@ func place_goals(layout: Array, num_goals: int) -> Array:
 	var min_reach: int = max(8, int(floor_count * 0.18))
 
 	for y in range(height):
+		if reverse_cancel:
+			return []
+
 		for x in range(width):
+			if reverse_cancel:
+				return []
+
 			var cell := Vector2i(x, y)
 
 			if not is_valid_goal_cell(layout, cell):
 				continue
 
 			var info: Dictionary = score_goal_cell(layout, cell)
+			if reverse_cancel:
+				return []
 
 			if info["reach_size"] < min_reach:
 				continue
@@ -646,6 +909,9 @@ func place_goals(layout: Array, num_goals: int) -> Array:
 
 	var pool: Array = []
 	for item in candidates:
+		if reverse_cancel:
+			return []
+
 		var item_cell: Vector2i = item["cell"]
 
 		if item_cell == seed_cell:
@@ -658,6 +924,9 @@ func place_goals(layout: Array, num_goals: int) -> Array:
 	pool.sort_custom(func(a, b): return a["score"] > b["score"])
 
 	for item in pool:
+		if reverse_cancel:
+			return []
+
 		if goals_placed >= num_goals:
 			break
 
@@ -822,6 +1091,9 @@ func propagate(wfc_grid: Array, adjacency: Dictionary, start_cell: Vector2i) -> 
 	var stack = [start_cell]
 
 	while stack.size() > 0:
+		if reverse_cancel:
+			return false
+
 		var cell: Vector2i = stack.pop_back()
 
 		var neighbours = [
@@ -832,6 +1104,9 @@ func propagate(wfc_grid: Array, adjacency: Dictionary, start_cell: Vector2i) -> 
 		]
 
 		for entry in neighbours:
+			if reverse_cancel:
+				return false
+
 			var neighbour: Vector2i = entry[0]
 			var dir: String = entry[1]
 
@@ -870,10 +1145,16 @@ func run_wfc(
 	max_restarts: int = 32
 ) -> Array:
 	for attempt in range(max_restarts):
+		if reverse_cancel:
+			return []
+
 		var wfc_grid = init_wfc(w, h, patterns.size())
 		var failed := false
 
 		while true:
+			if reverse_cancel:
+				return []
+
 			var cell = get_lowest_entropy_cell(wfc_grid, weights)
 
 			if cell == Vector2i(-1, -1):
@@ -891,6 +1172,8 @@ func run_wfc(
 			collapse_cell(wfc_grid, cell, weights)
 
 			if not propagate(wfc_grid, adjacency, cell):
+				if reverse_cancel:
+					return []
 				failed = true
 				break
 
@@ -903,15 +1186,27 @@ func compute_reachable_cells(layout: Array) -> Dictionary:
 	var reachable = {}
 	# start with all goal tiles
 	for y in range(height):
+		if reverse_cancel:
+			return {}
+
 		for x in range(width):
 			if layout[y][x] == 2:
 				reachable[Vector2i(x, y)] = true
 	# keep expanding until no new cells are added
 	var changed = true
 	while changed:
+		if reverse_cancel:
+			return {}
+
 		changed = false
 		for cell in reachable.keys():
+			if reverse_cancel:
+				return {}
+
 			for d in dirs:
+				if reverse_cancel:
+					return {}
+
 				# pull direction: box moves from cell to cell + d
 				# player must be on cell - d to pull
 				var new_box = cell + d
@@ -1160,20 +1455,17 @@ func has_good_box_mobility(layout: Array, box_cell: Vector2i, boxes: Array, igno
 	return count_box_pushes(layout, box_cell, boxes, ignore_idx) >= 1
 
 
-func is_blocked_cell(layout: Array, cell: Vector2i, boxes: Array) -> bool:
+func is_blocked_cell(layout: Array, cell: Vector2i, boxes: Array, box_lookup: Dictionary = {}) -> bool:
 	if not in_bounds(cell):
 		return true
-
 	if is_wall_in_layout(layout, cell):
 		return true
-
-	if _snapshot_has_box(cell, boxes, -1):
+	if _snapshot_has_box(cell, boxes, -1, box_lookup):
 		return true
-
 	return false
 
 
-func creates_2x2_lock(layout: Array, boxes: Array, moved_box: Vector2i) -> bool:
+func creates_2x2_lock(layout: Array, boxes: Array, moved_box: Vector2i, box_lookup: Dictionary = {}) -> bool:
 	var offsets = [
 		Vector2i(0, 0),
 		Vector2i(-1, 0),
@@ -1193,10 +1485,10 @@ func creates_2x2_lock(layout: Array, boxes: Array, moved_box: Vector2i) -> bool:
 		var has_non_goal_box := false
 
 		for cell in cells:
-			if is_blocked_cell(layout, cell, boxes):
+			if is_blocked_cell(layout, cell, boxes, box_lookup):
 				blocked += 1
 
-			if _snapshot_has_box(cell, boxes, -1):
+			if _snapshot_has_box(cell, boxes, -1, box_lookup):
 				box_count += 1
 				if not is_goal_in_layout(layout, cell):
 					has_non_goal_box = true
@@ -1244,7 +1536,8 @@ func count_reachable_pushes_for_box(
 	box_cell: Vector2i,
 	boxes: Array,
 	player_flood: Dictionary,
-	ignore_idx: int = -1
+	ignore_idx: int = -1,
+	box_lookup: Dictionary = {}
 ) -> int:
 	var count := 0
 
@@ -1262,9 +1555,9 @@ func count_reachable_pushes_for_box(
 		if is_wall_in_layout(layout, req_player):
 			continue
 
-		if _snapshot_has_box(new_box, boxes, ignore_idx):
+		if _snapshot_has_box(new_box, boxes, ignore_idx, box_lookup):
 			continue
-		if _snapshot_has_box(req_player, boxes, ignore_idx):
+		if _snapshot_has_box(req_player, boxes, ignore_idx, box_lookup):
 			continue
 
 		if not player_flood.has(req_player):
@@ -1280,38 +1573,39 @@ func has_reachable_box_push(
 	box_cell: Vector2i,
 	boxes: Array,
 	player_flood: Dictionary,
-	ignore_idx: int = -1
+	ignore_idx: int = -1,
+	box_lookup: Dictionary = {}
 ) -> bool:
-	return count_reachable_pushes_for_box(layout, box_cell, boxes, player_flood, ignore_idx) >= 1
+	return count_reachable_pushes_for_box(layout, box_cell, boxes, player_flood, ignore_idx, box_lookup) >= 1
 
 
 func total_reachable_pushes(layout: Array, state: State) -> int:
 	var total := 0
 
 	for i in range(state.boxes.size()):
-		var flood = _flood_layout(state.player, state.boxes, i, layout)
-		total += count_reachable_pushes_for_box(layout, state.boxes[i], state.boxes, flood, i)
+		var flood = _flood_layout(state.player, state.boxes, i, layout, state.box_lookup)
+		total += count_reachable_pushes_for_box(layout, state.boxes[i], state.boxes, flood, i, state.box_lookup)
 
 	return total
 
-func is_open_spawn_cell_layout(layout: Array, cell: Vector2i, boxes: Array) -> bool:
+func is_open_spawn_cell_layout(layout: Array, cell: Vector2i, boxes: Array, box_lookup: Dictionary = {}) -> bool:
 	if not in_bounds(cell):
 		return false
 
 	if is_wall_in_layout(layout, cell):
 		return false
 
-	if _snapshot_has_box(cell, boxes, -1):
+	if _snapshot_has_box(cell, boxes, -1, box_lookup):
 		return false
 
 	return true
 
 
-func first_open_spawn_cell(layout: Array, boxes: Array) -> Vector2i:
+func first_open_spawn_cell(layout: Array, boxes: Array, box_lookup: Dictionary = {}) -> Vector2i:
 	for y in range(height):
 		for x in range(width):
 			var cell = Vector2i(start.x + x, start.y + y)
-			if is_open_spawn_cell_layout(layout, cell, boxes):
+			if is_open_spawn_cell_layout(layout, cell, boxes, box_lookup):
 				return cell
 
 	return Vector2i(start.x + 1, start.y + 1)
@@ -1320,7 +1614,8 @@ func first_open_spawn_cell(layout: Array, boxes: Array) -> Vector2i:
 func collect_reachable_push_positions(
 	layout: Array,
 	boxes: Array,
-	player_flood: Dictionary
+	player_flood: Dictionary,
+	box_lookup: Dictionary = {}
 ) -> Array:
 	var found := {}
 
@@ -1341,9 +1636,9 @@ func collect_reachable_push_positions(
 			if is_wall_in_layout(layout, req_player):
 				continue
 
-			if _snapshot_has_box(new_box, boxes, i):
+			if _snapshot_has_box(new_box, boxes, i, box_lookup):
 				continue
-			if _snapshot_has_box(req_player, boxes, i):
+			if _snapshot_has_box(req_player, boxes, i, box_lookup):
 				continue
 
 			if not player_flood.has(req_player):
@@ -1402,12 +1697,13 @@ func choose_best_spawn_in_component(
 	return best_cell
 
 
-func find_best_player_spawn(layout: Array, boxes: Array, fallback_player: Vector2i) -> Vector2i:
-	if is_open_spawn_cell_layout(layout, fallback_player, boxes):
-		# keep as fallback if nothing better is found
+func find_best_player_spawn(layout: Array, boxes: Array, fallback_player: Vector2i, box_lookup: Dictionary = {}) -> Vector2i:
+	var lookup: Dictionary = box_lookup if not box_lookup.is_empty() else _make_box_lookup(boxes)
+
+	if is_open_spawn_cell_layout(layout, fallback_player, boxes, lookup):
 		pass
 	else:
-		fallback_player = first_open_spawn_cell(layout, boxes)
+		fallback_player = first_open_spawn_cell(layout, boxes, lookup)
 
 	var seen := {}
 	var best_cell: Vector2i = fallback_player
@@ -1420,15 +1716,15 @@ func find_best_player_spawn(layout: Array, boxes: Array, fallback_player: Vector
 			if seen.has(seed):
 				continue
 
-			if not is_open_spawn_cell_layout(layout, seed, boxes):
+			if not is_open_spawn_cell_layout(layout, seed, boxes, lookup):
 				continue
 
-			var flood = _flood_layout(seed, boxes, -1, layout)
+			var flood = _flood_layout(seed, boxes, -1, layout, lookup)
 			for c in flood.keys():
 				seen[c] = true
 
 			var component_cells = flood.keys()
-			var push_positions = collect_reachable_push_positions(layout, boxes, flood)
+			var push_positions = collect_reachable_push_positions(layout, boxes, flood, lookup)
 			var candidate = choose_best_spawn_in_component(component_cells, push_positions)
 
 			var component_score := 0
@@ -1441,6 +1737,59 @@ func find_best_player_spawn(layout: Array, boxes: Array, fallback_player: Vector
 				best_cell = candidate
 
 	return best_cell
+
+func _make_box_lookup(boxes: Array) -> Dictionary:
+	return State.build_box_lookup(boxes)
+
+
+func _move_box_lookup(box_lookup: Dictionary, old_cell: Vector2i, new_cell: Vector2i) -> Dictionary:
+	var next_lookup: Dictionary = box_lookup.duplicate()
+	next_lookup.erase(old_cell)
+	next_lookup[new_cell] = true
+	return next_lookup
+
+func _canonical_cell_from_flood(flood: Dictionary) -> Vector2i:
+	var best := Vector2i(999999, 999999)
+	for cell in flood.keys():
+		if cell.x < best.x or (cell.x == best.x and cell.y < best.y):
+			best = cell
+	return best
+
+func _state_key_from_flood(boxes: Array, full_flood: Dictionary) -> String:
+	var sorted := boxes.duplicate()
+	sorted.sort_custom(func(a, b): return str(a) < str(b))
+ 
+	var canonical_player := _canonical_cell_from_flood(full_flood)
+ 
+	var s := str(canonical_player)
+	for box in sorted:
+		s += str(box)
+	return s
+
+func _has_push_from_flood(
+	layout: Array,
+	new_box_cell: Vector2i,
+	new_boxes: Array,
+	box_idx: int,
+	new_lookup: Dictionary,
+	player_flood: Dictionary
+) -> bool:
+	for d in dirs:
+		var nb = new_box_cell + d      # where the box would move next
+		var rp = new_box_cell - d      # where the player must stand
+ 
+		if not in_bounds(nb) or not in_bounds(rp):
+			continue
+		if is_wall_in_layout(layout, nb) or is_wall_in_layout(layout, rp):
+			continue
+		if _snapshot_has_box(nb, new_boxes, box_idx, new_lookup):
+			continue
+		if _snapshot_has_box(rp, new_boxes, box_idx, new_lookup):
+			continue
+		if player_flood.has(rp):
+			return true
+ 
+	return false
 
 func display_fake_loading_screen(display: bool) -> void:
 	fake_loading_screen.visible = display
