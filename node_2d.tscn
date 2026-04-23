@@ -190,6 +190,10 @@ atlas = ExtResource("8_x0ka3")
 atlas = ExtResource("1_wtcfe")
 region = Rect2(17, 17, 62, 46)
 
+[sub_resource type="LabelSettings" id="LabelSettings_k73cj"]
+stacked_outline_count = 1
+stacked_outline_0/size = 7
+
 [sub_resource type="AtlasTexture" id="AtlasTexture_rjqkl"]
 atlas = ExtResource("18_k73cj")
 region = Rect2(0, 17, 16, 15)
@@ -340,20 +344,16 @@ texture = SubResource("AtlasTexture_k73cj")
 
 [node name="InstructionsLabel" type="Label" parent="." unique_id=10867175]
 z_index = 10
-offset_left = 407.99997
-offset_top = 272.0
-offset_right = 588.0
-offset_bottom = 503.0
-scale = Vector2(0.73624074, 0.51824)
+offset_left = 406.0
+offset_top = 320.0
+offset_right = 586.0
+offset_bottom = 551.0
+scale = Vector2(0.6942205, 0.51824)
 text = "Use 
-
-UP/
-DOWN/
-LEFT/
-RIGHT 
-
-Arrows 
-To move"
+WASD or
+ARROWS
+to move"
+label_settings = SubResource("LabelSettings_k73cj")
 
 [node name="Difficulties" type="OptionButton" parent="." unique_id=109988676]
 z_index = 10

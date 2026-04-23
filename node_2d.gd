@@ -102,9 +102,19 @@ func _ready() -> void:
 	var seed_rng := RandomNumberGenerator.new()
 	seed_rng.randomize()
 	current_seed = int(seed_rng.randi())
-	samples = [
-	layouts.layout1, layouts.layout2, layouts.layout3, layouts.layout4, layouts.layout5,
-	layouts.layout6, layouts.layout7, layouts.layout8]
+	match save_data.difficulty:
+		Difficulty.EASY:
+			samples = [layouts.layout1, layouts.layout2, layouts.layout3, layouts.layout4, layouts.layout5]
+		Difficulty.MEDIUM:
+			samples = [layouts.layout6, layouts.layout7, layouts.layout8, layouts.layout9, layouts.layout10]
+			#samples = [layouts.layout6]
+		Difficulty.HARD:
+			samples = [layouts.layout11, layouts.layout12, layouts.layout13, layouts.layout14, layouts.layout15]
+		_:
+			samples = [layouts.layout6, layouts.layout7, layouts.layout8, layouts.layout9, layouts.layout10]
+	#samples = [
+	#layouts.layout1, layouts.layout2, layouts.layout3, layouts.layout4, layouts.layout5,
+	#layouts.layout6, layouts.layout7, layouts.layout8]
 
 
 	var pattern_data = extract_patterns(samples, PATTERN_SIZE)
@@ -543,19 +553,19 @@ func _dfs_generate_full_thread(
 	if reverse_cancel:
 		return {"cancelled": true}
 
-	var final_spawn = find_best_player_spawn(layout, best.boxes, best.player, best.box_lookup)
+	#var final_spawn = find_best_player_spawn(layout, best.boxes, best.player, best.box_lookup)
 
 	return {
 		"boxes": best.boxes,
 		"player": best.player,
-		"spawn_player": final_spawn,
+		"spawn_player": best.player,
 		"depth": best.depth,
 		"score": best_score,
 		"cancelled": false
 	}
 
 
-func _start_wfc_thread(w: int, h: int, max_attempts: int = 100) -> void:
+func _start_wfc_thread(w: int, h: int, max_attempts: int = 1000) -> void:
 	if wfc_running or reverse_running:
 		return
 
@@ -606,7 +616,7 @@ func _generate_layout_thread(
 	adjacency_snapshot: Dictionary,
 	weights_snapshot: Array,
 	goal_count: int,
-	max_attempts: int = 100,
+	max_attempts: int = 1000,
 	wfc_seed: int = 1
 ) -> Dictionary:
 	var attempts := 0
@@ -1021,7 +1031,7 @@ func place_goals(layout: Array, num_goals: int, rng: RandomNumberGenerator = nul
 func extract_patterns(layouts: Array, pattern_size: int) -> Dictionary:
 	var patterns: Array = []
 	var weights: Array = []
-	var pattern_index := {}
+	var pattern_index : Dictionary= {}
 
 	for layout in layouts:
 		for y in range(layout.size() - pattern_size + 1):
@@ -1034,13 +1044,13 @@ func extract_patterns(layouts: Array, pattern_size: int) -> Dictionary:
 						row.append(layout[y + dy][x + dx])
 					pattern.append(row)
 
-				var key := JSON.stringify(pattern)
+				var key : String = JSON.stringify(pattern)
 
 				if pattern_index.has(key):
 					var idx: int = pattern_index[key]
 					weights[idx] += 1
 				else:
-					var new_idx := patterns.size()
+					var new_idx : int = patterns.size()
 					pattern_index[key] = new_idx
 					patterns.append(pattern)
 					weights.append(1)
@@ -1051,7 +1061,7 @@ func extract_patterns(layouts: Array, pattern_size: int) -> Dictionary:
 	}
 
 func build_adjacency(patterns: Array, pattern_size: int) -> Dictionary:
-	var adjacency = {}
+	var adjacency : Dictionary = {}
 	for i in range(patterns.size()):
 		adjacency[i] = {
 			"right": [],
@@ -1097,7 +1107,7 @@ func init_wfc(w: int, h: int, num_patterns: int) -> Array:
 	return wfc_grid
 
 func weighted_random_choice(candidates: Array, weights: Array, rng: RandomNumberGenerator) -> int:
-	var total := 0.0
+	var total :float = 0.0
 
 	for pattern_idx in candidates:
 		total += float(weights[pattern_idx])

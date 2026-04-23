@@ -35,7 +35,7 @@ func _physics_process(delta: float) -> void:
 
 	if is_moving:
 		return
-	if Input.is_action_just_pressed("ui_up") and !up.is_colliding() and can_move:
+	if Input.is_action_just_pressed("up") and !up.is_colliding() and can_move:
 		is_moving = true
 		down_collider.disabled = false
 		up_collider.disabled = true
@@ -45,7 +45,7 @@ func _physics_process(delta: float) -> void:
 		is_moving = false
 		return
 		
-	if Input.is_action_just_pressed("ui_down") and !down.is_colliding() and can_move:
+	if Input.is_action_just_pressed("down") and !down.is_colliding() and can_move:
 		is_moving = true
 		up_collider.disabled = false
 		down_collider.disabled = true
@@ -55,7 +55,7 @@ func _physics_process(delta: float) -> void:
 		is_moving = false
 		return
 		
-	if Input.is_action_just_pressed("ui_left") and !left.is_colliding() and can_move :
+	if Input.is_action_just_pressed("left") and !left.is_colliding() and can_move :
 		sprite_2d.flip_h = true
 		is_moving = true
 		right_collider.disabled = true
@@ -66,7 +66,7 @@ func _physics_process(delta: float) -> void:
 		is_moving = false
 		return
 	
-	if Input.is_action_just_pressed("ui_right") and !right.is_colliding() and can_move:
+	if Input.is_action_just_pressed("right") and !right.is_colliding() and can_move:
 		sprite_2d.flip_h = false
 		is_moving = true
 		left_collider.disabled = true
