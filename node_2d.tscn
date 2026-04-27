@@ -184,7 +184,6 @@ animations = [{
 }]
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_x0ka3"]
-atlas = ExtResource("8_x0ka3")
 
 [sub_resource type="AtlasTexture" id="AtlasTexture_k73cj"]
 atlas = ExtResource("1_wtcfe")
@@ -337,6 +336,7 @@ stream = ExtResource("17_flf07")
 volume_db = -3.628
 
 [node name="InstructionsSprite" type="Sprite2D" parent="." unique_id=976032901]
+visible = false
 z_index = 9
 position = Vector2(431.5, 304)
 scale = Vector2(1.0483872, 4.1739135)
@@ -345,9 +345,9 @@ texture = SubResource("AtlasTexture_k73cj")
 [node name="InstructionsLabel" type="Label" parent="." unique_id=10867175]
 z_index = 10
 offset_left = 406.0
-offset_top = 320.0
+offset_top = 256.0
 offset_right = 586.0
-offset_bottom = 551.0
+offset_bottom = 487.0
 scale = Vector2(0.6942205, 0.51824)
 text = "Use 
 WASD or

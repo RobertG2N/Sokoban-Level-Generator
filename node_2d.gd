@@ -26,10 +26,10 @@ var pattern_weights: Array = []
 signal on_goal(box)
 signal left_goal(box)
 
-var width = 19
-var height = 12
+var width = 9
+var height = 9
 var floor_tile_atlas_coords = Vector2i(1,1)
-var start = Vector2i(29,13)
+var start = Vector2i(33,14)
 var source_id = 0
 var wall_tile_atlas_coords = Vector2i(1,0)
 var goal_tile = Vector2i(9,9)
@@ -104,14 +104,13 @@ func _ready() -> void:
 	current_seed = int(seed_rng.randi())
 	match save_data.difficulty:
 		Difficulty.EASY:
-			samples = [layouts.layout1, layouts.layout2, layouts.layout3, layouts.layout4, layouts.layout5]
+			samples = [layouts.easy_layout_1, layouts.easy_layout_2, layouts.easy_layout_3]
 		Difficulty.MEDIUM:
-			samples = [layouts.layout6, layouts.layout7, layouts.layout8, layouts.layout9, layouts.layout10]
-			#samples = [layouts.layout6]
+			samples = [layouts.medium_layout_1, layouts.medium_layout_2, layouts.medium_layout_3]
 		Difficulty.HARD:
-			samples = [layouts.layout11, layouts.layout12, layouts.layout13, layouts.layout14, layouts.layout15]
+			samples = [layouts.hard_layout_1, layouts.hard_layout_2, layouts.hard_layout_3]
 		_:
-			samples = [layouts.layout6, layouts.layout7, layouts.layout8, layouts.layout9, layouts.layout10]
+			samples = [layouts.medium_layout_1, layouts.medium_layout_2, layouts.medium_layout_3]
 	#samples = [
 	#layouts.layout1, layouts.layout2, layouts.layout3, layouts.layout4, layouts.layout5,
 	#layouts.layout6, layouts.layout7, layouts.layout8]
@@ -158,12 +157,12 @@ func get_difficulty_settings() -> Dictionary:
 	match save_data.difficulty:
 		Difficulty.EASY:
 			return {
-				"max_depth": 8,
+				"max_depth": 16,
 				"max_nodes": 5000
 			}
 		Difficulty.MEDIUM:
 			return {
-				"max_depth": 14,
+				"max_depth": 18,
 				"max_nodes": 5000
 			}
 		Difficulty.HARD:
@@ -173,7 +172,7 @@ func get_difficulty_settings() -> Dictionary:
 			}
 		_:
 			return {
-				"max_depth": 14,
+				"max_depth": 18,
 				"max_nodes": 5000
 			}
 
