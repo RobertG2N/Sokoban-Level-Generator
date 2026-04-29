@@ -16,7 +16,6 @@
 [ext_resource type="Texture2D" uid="uid://dw8ypt4rf0a8m" path="res://2D Pixel Dungeon Asset Pack/Character_animation/monsters_idle/skeleton2/v1/skeleton2_v1_4.png" id="12_ta5nu"]
 [ext_resource type="Texture2D" uid="uid://i4usd83ogcld" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/flag/flag_4.png" id="13_0h7mo"]
 [ext_resource type="Texture2D" uid="uid://b16blbkikvoyg" path="res://2D Pixel Dungeon Asset Pack/items and trap_animation/coin/coin_1.png" id="16_ta5nu"]
-[ext_resource type="AudioStream" uid="uid://c7oeemntma0j8" path="res://i-just-hit-the-jackpot.mp3" id="17_flf07"]
 [ext_resource type="Texture2D" uid="uid://dlwnhxlgcpd5u" path="res://2D Pixel Dungeon Asset Pack/character and tileset/Dungeon_Character_2.png" id="18_k73cj"]
 
 [sub_resource type="TileSetAtlasSource" id="TileSetAtlasSource_0e48y"]
@@ -330,10 +329,6 @@ offset_right = 731.0
 offset_bottom = 219.00002
 scale = Vector2(0.7049603, 0.53764385)
 text = "Boxes: 0"
-
-[node name="AudioStreamPlayer" type="AudioStreamPlayer" parent="." unique_id=278482631]
-stream = ExtResource("17_flf07")
-volume_db = -3.628
 
 [node name="InstructionsSprite" type="Sprite2D" parent="." unique_id=976032901]
 visible = false

@@ -11,7 +11,6 @@ extends Node2D
 @onready var increase_goals_button: Button = $IncreaseGoals
 @onready var decrease_goals_button: Button = $DecreaseGoals
 @onready var goals_label: Label = $GoalsLabel
-@onready var audio_stream_player: AudioStreamPlayer = $AudioStreamPlayer
 
 var level_complete_triggered := false
 var background_track_volume: float = 0.07
@@ -26,10 +25,10 @@ var pattern_weights: Array = []
 signal on_goal(box)
 signal left_goal(box)
 
-var width = 9
-var height = 9
+var width = 12
+var height = 12
 var floor_tile_atlas_coords = Vector2i(1,1)
-var start = Vector2i(33,14)
+var start = Vector2i(32,13)
 var source_id = 0
 var wall_tile_atlas_coords = Vector2i(1,0)
 var goal_tile = Vector2i(9,9)
@@ -204,7 +203,6 @@ func generate_level(w: int, h: int) -> void:
 
 func retry_level() -> void:
 	generate_level(width, height)
-	audio_stream_player.stop()
 	BackgroundTrack.volume_linear = background_track_volume
 
 
@@ -253,8 +251,6 @@ func check_level_complete() -> void:
 	if complete and not level_complete_triggered:
 		level_complete_triggered = true
 		BackgroundTrack.volume_linear = 0.0
-		audio_stream_player.play()
-		audio_stream_player.volume_linear = background_track_volume
 
 
 func update_goals_label() -> void:
