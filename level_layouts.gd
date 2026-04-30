@@ -1,6 +1,12 @@
 extends Resource
 class_name Layouts
 
+## Stores the example wall/floor layouts used as WFC training data.
+## The generator does not copy these layouts directly. Instead, it extracts
+## local tile patterns from them and uses those patterns to build new layouts.
+
+# Easier layouts are mostly open, with small wall clusters.
+# These give the WFC stage patterns that leave more room for movement and pushing.
 var easy_layout_1 = [
 	[0,0,0,0,0,0,0,0,0,0,0,0],
 	[0,0,0,0,0,0,0,0,0,0,0,0],
@@ -46,6 +52,7 @@ var easy_layout_3 = [
 	[0,0,0,0,0,0,0,0,0,0,0,0]
 ]
 
+# Medium layouts introduce more wall structure than easy layouts.
 var medium_layout_1 = [
 	[0,0,0,0,0,0,0,0,0,0,0,0],
 	[0,0,0,0,1,1,0,0,0,0,0,0],
@@ -91,6 +98,8 @@ var medium_layout_3 = [
 	[0,0,0,0,0,0,0,0,0,0,0,0]
 ]
 
+# Hard layouts contain denser and more irregular wall arrangements.
+# These patterns create tighter movement spaces for generated levels.
 var hard_layout_1 = [
 	[0,0,0,0,0,0,0,0,0,0,0,0],
 	[0,0,1,0,1,1,0,0,0,0,0,0],

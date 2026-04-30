@@ -1,5 +1,11 @@
 extends Node2D
 
+## Main scene controller.
+## This script coordinates the generation pipeline, applies generated data to the scene,
+## and connects the UI/gameplay objects needed to play each generated Sokoban level.
+
+# Scene references used by the controller.
+# These are initialised once the scene is loaded and are only accessed on the main thread.
 @onready var tile_map: TileMap = $TileMap
 @onready var player: Node2D = $Player
 @onready var retry_button: Button = $RetryLevel
@@ -12,85 +18,114 @@ extends Node2D
 @onready var decrease_goals_button: Button = $DecreaseGoals
 @onready var goals_label: Label = $GoalsLabel
 
+# Prevents the completion logic from firing repeatedly after a level has already been solved.
 var level_complete_triggered := false
+# Audio level used for backgorund audio.
 var background_track_volume: float = 0.07
-var victory_track_volume: float = 0.2
 
+# Shared cancellation flags checked by the worker threads during generation and shutdown.
 var reverse_cancel := false
 var quit_requested := false
 
+# WFC settings. A 3x3 pattern gives useful local structure without copying large chunks too often.
 const PATTERN_SIZE := 3
 var pattern_weights: Array = []
 
+# Signals sent when boxes enter or leave goal areas.
+# Boxes listen to these to update their sprites.
 signal on_goal(box)
 signal left_goal(box)
 
+# Generated level size and TileMap placement settings.
 var width = 12
 var height = 12
 var floor_tile_atlas_coords = Vector2i(1,1)
+# start is the TileMap cell where the first top left cell is drawn.
 var start = Vector2i(32,13)
 var source_id = 0
 var wall_tile_atlas_coords = Vector2i(1,0)
 var goal_tile = Vector2i(9,9)
+# Shared four-direction movement list used by layout checks, flood fills, WFC helpers, and DFS search.
 var dirs = [
 Vector2i(1, 0),
 Vector2i(-1, 0),
 Vector2i(0, 1),
 Vector2i(0, -1)
 ]
+# Runtime level state. box_list stores the spawned box nodes, while reachable_cells stores
+# layout-local cells that are useful for reverse Sokoban movement.
 var box_list = []
 var reachable_cells: Dictionary = {}
+# The seed for the current level. Retry keeps this value; New Level reloads and creates a new one.
 var current_seed: int = 0
 
+# Scenes spawned by this script when applying a generated level.
 @export var box_scene: PackedScene
 @export var credit_scene: PackedScene
 @export var goal_area_scene: PackedScene
 
+# Goal trigger areas spawned for the current level so they can be removed before regenerating.
 var goal_area_list = []
 
+# Difficulty selector used to choose which WFC training layouts and DFS depth settings are used.
 @onready var difficulties: OptionButton = $Difficulties
-
+# Stored difficulty values. These match the item IDs used by the difficulty OptionButton.
 enum Difficulty {
 	EASY,
 	MEDIUM,
 	HARD
 }
 
+## search state structure used by the reverse DFS.
+## It stores the current box positions, the player cell, the depth reached, and a lookup table
+## so the search can check box occupancy quickly without scanning the full box array each time.
 class State:
 	var boxes: Array
 	var box_lookup: Dictionary
 	var player: Vector2i
 	var depth: int
-
+	
+	## Builds the fast occupancy lookup used by the DFS when checking box collisions.
 	static func build_box_lookup(box_list: Array) -> Dictionary:
 		var lookup := {}
 		for cell in box_list:
 			lookup[cell] = true
 		return lookup
-
+	
+	## Stores a snapshot of one reverse DFS state. A lookup can be passed in to avoid rebuilding it.
 	func _init(b: Array, p: Vector2i, d: int, lookup: Dictionary = {}):
 		boxes = b.duplicate()
 		box_lookup = lookup.duplicate() if not lookup.is_empty() else State.build_box_lookup(boxes)
 		player = p
 		depth = d
 
+# WFC data built from the selected difficulty samples at startup.
 var samples = []
 var patterns = []
 var adjacency = {}
+# Save file and deterministic seed salts.
+# Different salts produce separate repeatable RNG streams for WFC and DFS from one level seed.
 const SAVE_PATH := "user://save_file.tres"
 const WFC_STAGE_SALT: int = 1482041217
 const DFS_STAGE_SALT: int = 925611173
+# External resources used by the generator.
+# SaveData stores player settings; Layouts stores the WFC training layouts.
 var save_data: SaveData
 var layouts: Layouts = load("res://layouts.tres")
+# Worker thread state. The WFC and reverse DFS stages run off the main thread and then
+# return their results through deferred callbacks before scene objects are modified.
 var reverse_thread: Thread
 var reverse_running := false
 var wfc_thread: Thread
 var wfc_running := false
+# Current completion state for the live level.
 var boxes_on_goals: int = 0
 var dfs_complete: bool = false
 
 
 # Called when the node enters the scene tree for the first time.
+## Initialises saved settings, chooses the WFC sample set for the selected difficulty,
+## builds the pattern rules, and starts the first generated level.
 func _ready() -> void:  
 	await get_tree().physics_frame
 	BackgroundTrack.volume_linear = background_track_volume
@@ -125,6 +160,7 @@ func _ready() -> void:
 	generate_level(width, height)
 	update_goals_label()
 
+## Keeps the goal counter safe and checks the win condition once DFS has finished applying the level.
 func _process(delta: float) -> void:
 	if save_data == null:
 		return
@@ -135,6 +171,7 @@ func _process(delta: float) -> void:
 	if dfs_complete:
 		check_level_complete()
 
+## Loads the persistent difficulty and box count, creating a default save file if none exists yet.
 func load_save_data() -> void:
 	if ResourceLoader.exists(SAVE_PATH):
 		save_data = ResourceLoader.load(SAVE_PATH, "", ResourceLoader.CACHE_MODE_IGNORE) as SaveData
@@ -147,11 +184,13 @@ func load_save_data() -> void:
 
 	save_data.goals = clamp(save_data.goals, 1, 4)
 
+## Writes the current SaveData resource to disk so settings persist between runs.
 func save_save_data() -> void:
 	var err = ResourceSaver.save(save_data, SAVE_PATH)
 	print("save err = ", err)
 	print("save path = ", ProjectSettings.globalize_path(SAVE_PATH))
 
+## Maps the selected difficulty to the reverse DFS search limits used for that level.
 func get_difficulty_settings() -> Dictionary:
 	match save_data.difficulty:
 		Difficulty.EASY:
@@ -175,6 +214,7 @@ func get_difficulty_settings() -> Dictionary:
 				"max_nodes": 5000
 			}
 
+## Clears the current level, resets generation state, shows the loading screen, and starts WFC generation.
 func generate_level(w: int, h: int) -> void:
 	if wfc_running or reverse_running:
 		return
@@ -200,12 +240,12 @@ func generate_level(w: int, h: int) -> void:
 
 	_start_wfc_thread(w, h)
 
-
+## Regenerates the current level using the same seed, allowing the player to replay the same puzzle setup.
 func retry_level() -> void:
 	generate_level(width, height)
 	BackgroundTrack.volume_linear = background_track_volume
 
-
+## Spawns a box scene at a TileMap cell and connects its blocked-push signal back to the player.
 func spawn_box(pos: Vector2i):
 	var box = box_scene.instantiate()
 	var tile_local_pos = tile_map.map_to_local(pos)
@@ -219,6 +259,7 @@ func spawn_box(pos: Vector2i):
 	print(tile_map.local_to_map(box.position))
 	print()
 
+## Creates an invisible trigger area for a goal cell so this script can track boxes entering and leaving it.
 func spawn_goal_area(cell: Vector2i) -> void:
 	var area = goal_area_scene.instantiate()
 	area.cell = cell
@@ -228,6 +269,7 @@ func spawn_goal_area(cell: Vector2i) -> void:
 	add_child(area)
 	goal_area_list.append(area)
 
+## Handles a box entering a goal trigger. During generation this only updates the box sprite; after DFS it also updates completion state.
 func _on_goal_area_body_entered(body: Node, area: Area2D, cell: Vector2i) -> void:
 	emit_signal("on_goal", body)
 	if not dfs_complete:
@@ -236,6 +278,7 @@ func _on_goal_area_body_entered(body: Node, area: Area2D, cell: Vector2i) -> voi
 	print("box on goal")
 	print(boxes_on_goals)
 
+## Handles a box leaving a goal trigger and updates completion state once the level is playable.
 func _on_goal_area_body_exited(body: Node, area: Area2D, cell: Vector2i) -> void:
 	emit_signal("left_goal", body)
 	if not dfs_complete:
@@ -243,7 +286,7 @@ func _on_goal_area_body_exited(body: Node, area: Area2D, cell: Vector2i) -> void
 	boxes_on_goals -= 1
 	print(boxes_on_goals)
 
-
+## Shows the victory label and mutes the background music when all boxes are on goals.
 func check_level_complete() -> void:
 	var complete = (boxes_on_goals == save_data.goals)
 	victory_label.visible = complete
@@ -252,21 +295,24 @@ func check_level_complete() -> void:
 		level_complete_triggered = true
 		BackgroundTrack.volume_linear = 0.0
 
-
+## Refreshes the UI label that displays the current box/goal count setting.
 func update_goals_label() -> void:
 	goals_label.text = "Boxes: " + str(save_data.goals)
 
+## Derives a deterministic per-stage seed from the level seed so WFC and DFS can be reproduced independently.
 func _make_stage_seed(base_seed: int, salt: int) -> int:
 	var mixed: int = abs(base_seed * 1664525 + salt * 1013904223 + 12345)
 	if mixed == 0:
 		mixed = salt + 1
 	return mixed
 
+## Creates a RandomNumberGenerator with a fixed seed for deterministic generation.
 func _make_rng_from_seed(seed_value: int) -> RandomNumberGenerator:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	return rng
 
+## Shuffles an array using the provided RNG instead of Godot global randomness, keeping generation repeatable.
 func shuffle_with_rng(items: Array, rng: RandomNumberGenerator) -> void:
 	for i in range(items.size() - 1, 0, -1):
 		var j: int = rng.randi_range(0, i)
@@ -274,19 +320,21 @@ func shuffle_with_rng(items: Array, rng: RandomNumberGenerator) -> void:
 		items[i] = items[j]
 		items[j] = temp
 
-
+## Checks whether a world/grid cell is outside the generated layout or blocked by a wall in the layout array.
 func is_wall_in_layout(layout: Array, cell: Vector2i) -> bool:
 	var local = cell - start
 	if local.x < 0 or local.x >= width or local.y < 0 or local.y >= height:
 		return true
 	return layout[local.y][local.x] == 1
 
+## Checks whether a world/grid cell corresponds to a goal tile in the layout array.
 func is_goal_in_layout(layout: Array, cell: Vector2i) -> bool:
 	var local = cell - start
 	if local.x < 0 or local.x >= width or local.y < 0 or local.y >= height:
 		return false
 	return layout[local.y][local.x] == 2
 
+## Rejects simple deadlock cells for boxes: non-goal corners and cells directly beside the border.
 func is_deadlock_in_layout_world(layout: Array, cell: Vector2i) -> bool:
 	if is_goal_in_layout(layout, cell):
 		return false
@@ -304,10 +352,12 @@ func is_deadlock_in_layout_world(layout: Array, cell: Vector2i) -> bool:
 
 	return false
 
+## Enables or disables the level generation buttons while worker threads are running.
 func set_generation_buttons_enabled(enabled: bool) -> void:
 	retry_button.disabled = not enabled
 	new_level_button.disabled = not enabled
 
+## Flood fills the player reachable area for a snapshot of box positions, optionally ignoring one moving box.
 func _flood_layout(from: Vector2i, snapshot: Array, ignore_idx: int, layout: Array, box_lookup: Dictionary = {}) -> Dictionary:
 	var open: Array = [from]
 	var head := 0
@@ -341,6 +391,7 @@ func _flood_layout(from: Vector2i, snapshot: Array, ignore_idx: int, layout: Arr
 
 	return visited
 
+## Builds one player flood per box so scoring can estimate available pushes from a state.
 func make_state_floods(state: State, layout: Array) -> Array:
 	var floods: Array = []
 	floods.resize(state.boxes.size())
@@ -350,6 +401,7 @@ func make_state_floods(state: State, layout: Array) -> Array:
 
 	return floods
 
+## Precomputes simple deadlock cells for a layout. Useful when many cells need to be checked repeatedly.
 func make_deadlock_lookup(layout: Array) -> Dictionary:
 	var out := {}
 
@@ -361,7 +413,7 @@ func make_deadlock_lookup(layout: Array) -> Dictionary:
 
 	return out
 
-
+## Counts how many legal box pushes are reachable from precomputed player floods.
 func total_reachable_pushes_from_floods(layout: Array, state: State, floods: Array) -> int:
 	var total := 0
 
@@ -370,7 +422,7 @@ func total_reachable_pushes_from_floods(layout: Array, state: State, floods: Arr
 
 	return total
 
-
+## Scores a DFS state using precomputed floods; kept separate from score_state to avoid repeated flood work when available.
 func score_state_from_floods(state: State, goal_cells: Array, layout: Array, floods: Array) -> int:
 	var moved_boxes := 0
 	var total_distance := 0
@@ -405,6 +457,7 @@ func score_state_from_floods(state: State, goal_cells: Array, layout: Array, flo
 		pair_penalty * 200
 	)
 
+## Finds one consistent representative cell for the player reachable region, so equivalent player positions share a state key.
 func _canonical_player_cell_layout(player_cell: Vector2i, boxes: Array, layout: Array, box_lookup: Dictionary = {}) -> Vector2i:
 	var flood = _flood_layout(player_cell, boxes, -1, layout, box_lookup)
 	var best = Vector2i(999999, 999999)
@@ -415,6 +468,7 @@ func _canonical_player_cell_layout(player_cell: Vector2i, boxes: Array, layout: 
 
 	return best
 
+## Builds the visited-state key from sorted box positions and the canonical player region.
 func _state_key_layout(boxes: Array, player_cell: Vector2i, layout: Array, box_lookup: Dictionary = {}) -> String:
 	var sorted = boxes.duplicate()
 	sorted.sort_custom(func(a, b): return str(a) < str(b))
@@ -426,10 +480,12 @@ func _state_key_layout(boxes: Array, player_cell: Vector2i, layout: Array, box_l
 		s += str(box)
 	return s
 
+## Converts a layout cell into an integer ID based on its local position.
 func _cell_id(cell: Vector2i) -> int:
 	var local = cell - start
 	return local.y * width + local.x
 
+## Reverse DFS worker. Starts from boxes on goals and searches backwards for a stronger starting configuration.
 func _dfs_generate_full_thread(
 	initial_boxes: Array,
 	initial_player: Vector2i,
@@ -559,7 +615,7 @@ func _dfs_generate_full_thread(
 		"cancelled": false
 	}
 
-
+## Copies the data needed by WFC and launches the layout generation worker thread.
 func _start_wfc_thread(w: int, h: int, max_attempts: int = 1000) -> void:
 	if wfc_running or reverse_running:
 		return
@@ -581,7 +637,7 @@ func _start_wfc_thread(w: int, h: int, max_attempts: int = 1000) -> void:
 			wfc_seed
 		)
 	)
-
+## Worker entry point for WFC generation. It calculates the layout and returns through a deferred main-thread callback.
 func _thread_wfc_job(
 	w: int,
 	h: int,
@@ -604,6 +660,7 @@ func _thread_wfc_job(
 	)
 	call_deferred("_apply_wfc_result", result)
 
+## Attempts complete layout generation: WFC, border, connectivity, goal placement, and reachable-cell computation.
 func _generate_layout_thread(
 	w: int,
 	h: int,
@@ -663,6 +720,7 @@ func _generate_layout_thread(
 		"attempts": attempts
 	}
 
+## Applies the completed WFC result on the main thread, drawing tiles and spawning the solved-state boxes/goals.
 func _apply_wfc_result(result: Dictionary) -> void:
 	wfc_running = false
 
@@ -711,6 +769,7 @@ func _apply_wfc_result(result: Dictionary) -> void:
 	var settings = get_difficulty_settings()
 	_start_reverse_thread(layout.duplicate(true), settings["max_depth"], settings["max_nodes"])
 
+## Takes a snapshot of the solved state and starts the reverse DFS worker thread.
 func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 5000) -> void:
 	if reverse_running:
 		return
@@ -739,6 +798,7 @@ func _start_reverse_thread(layout: Array, max_depth: int = 20, max_nodes: int = 
 		)
 	)
 
+## Worker entry point for reverse DFS generation. It returns the best state through a deferred callback.
 func _thread_reverse_job(
 	box_snapshot: Array,
 	player_cell: Vector2i,
@@ -759,6 +819,7 @@ func _thread_reverse_job(
 	)
 	call_deferred("_apply_reverse_result", result)
 
+## Applies the reverse DFS result on the main thread by moving boxes and placing the player.
 func _apply_reverse_result(result: Dictionary) -> void:
 	reverse_running = false
 
@@ -796,6 +857,7 @@ func _apply_reverse_result(result: Dictionary) -> void:
 	display_fake_loading_screen(false)
 	set_generation_buttons_enabled(true)
 
+## Handles window close requests safely while generation threads may still be running.
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		if wfc_running or reverse_running:
@@ -805,6 +867,7 @@ func _notification(what: int) -> void:
 
 		get_tree().quit()
 
+## Cancels and joins worker threads when the scene is being removed.
 func _exit_tree() -> void:
 	reverse_cancel = true
 
@@ -816,17 +879,20 @@ func _exit_tree() -> void:
 		reverse_thread.wait_to_finish()
 		reverse_thread = null
 
+## Converts a scene/world position into the matching TileMap cell.
 func world_to_grid(pos: Vector2) -> Vector2i:
 	return tile_map.local_to_map(pos - tile_map.position)
 
+## Converts a TileMap cell into the scene/world position used by player and box nodes.
 func grid_to_world_pos(cell: Vector2i) -> Vector2:
 	return tile_map.position + tile_map.map_to_local(cell)
 
+## Checks the TileMap for a wall tile. Used for scene placement helpers.
 func is_wall(cell: Vector2i) -> bool:
 	var data = tile_map.get_cell_atlas_coords(0, cell)
 	return data == wall_tile_atlas_coords
 
-
+## Checks live spawned boxes to avoid placing objects on top of an existing box.
 func is_box_at(cell: Vector2i, ignore_box = null) -> bool:
 	for box in box_list:
 		if box == ignore_box:
@@ -835,7 +901,7 @@ func is_box_at(cell: Vector2i, ignore_box = null) -> bool:
 			return true
 	return false
 
-
+## Detects cells directly inside the generated border, which are deadlocked positions for boxes in most cases.
 func is_next_to_border(cell: Vector2i) -> bool:
 	return (
 		cell.x == start.x + 1 or
@@ -844,8 +910,7 @@ func is_next_to_border(cell: Vector2i) -> bool:
 		cell.y == start.y + height - 2
 	)
 
-
-
+## Places the player on the first available open cell before reverse DFS chooses the final spawn.
 func place_player():
 	for y in range(height):
 		for x in range(width):
@@ -862,8 +927,6 @@ func place_player():
 ## Checks whether a grid cell lies within the playable level area.
 ## Returns true if the cell is inside the level bounds, otherwise false.
 func in_bounds(cell: Vector2i) -> bool:
-	# The function returns the result of all these conditions combined.
-	# Every condition must be true for the cell to be considered inside the map.
 	return (
 	# Check that the cell's x coordinate is not left of the level start
 	cell.x >= start.x and
@@ -876,6 +939,7 @@ func in_bounds(cell: Vector2i) -> bool:
 	cell.y < start.y + height
 	)
 
+## Checks whether a cell contains a box in a generation snapshot, with support for ignoring the box currently being moved.
 func _snapshot_has_box(cell: Vector2i, snapshot: Array, ignore_idx: int, box_lookup: Dictionary = {}) -> bool:
 	if not box_lookup.is_empty():
 		if ignore_idx >= 0 and ignore_idx < snapshot.size() and snapshot[ignore_idx] == cell:
@@ -889,7 +953,7 @@ func _snapshot_has_box(cell: Vector2i, snapshot: Array, ignore_idx: int, box_loo
 			return true
 	return false
 
-
+## Validates that every floor/goal cell in the generated layout belongs to one connected region.
 func is_layout_connected(layout: Array) -> bool:
 	var start_cell = Vector2i(-1, -1)
 	var floor_count = 0
@@ -931,6 +995,7 @@ func is_layout_connected(layout: Array) -> bool:
 			open.append(nxt)
 	return visited.size() == floor_count
 
+## Selects goal cells using hard filters, scoring, shared reachable region, and spacing rules.
 func place_goals(layout: Array, num_goals: int, rng: RandomNumberGenerator = null) -> Array:
 	if rng == null:
 		rng = _make_rng_from_seed(_make_stage_seed(current_seed, WFC_STAGE_SALT))
@@ -1022,7 +1087,7 @@ func place_goals(layout: Array, num_goals: int, rng: RandomNumberGenerator = nul
 	return layout
 
 
-
+## Extracts unique WFC patterns from the selected training layouts and records their frequency weights.
 func extract_patterns(layouts: Array, pattern_size: int) -> Dictionary:
 	var patterns: Array = []
 	var weights: Array = []
@@ -1055,6 +1120,7 @@ func extract_patterns(layouts: Array, pattern_size: int) -> Dictionary:
 		"weights": weights
 	}
 
+## Builds the WFC compatibility table by comparing overlapping edges of every pair of patterns.
 func build_adjacency(patterns: Array, pattern_size: int) -> Dictionary:
 	var adjacency : Dictionary = {}
 	for i in range(patterns.size()):
@@ -1089,6 +1155,7 @@ func build_adjacency(patterns: Array, pattern_size: int) -> Dictionary:
 				
 	return adjacency
 
+## Creates the initial WFC grid where every output cell can still be any pattern.
 func init_wfc(w: int, h: int, num_patterns: int) -> Array:
 	var wfc_grid = []
 	for y in range(h):
@@ -1101,6 +1168,7 @@ func init_wfc(w: int, h: int, num_patterns: int) -> Array:
 		wfc_grid.append(row)
 	return wfc_grid
 
+## Chooses one WFC pattern from a candidate list using the pattern frequency weights.
 func weighted_random_choice(candidates: Array, weights: Array, rng: RandomNumberGenerator) -> int:
 	var total :float = 0.0
 
@@ -1120,6 +1188,7 @@ func weighted_random_choice(candidates: Array, weights: Array, rng: RandomNumber
 
 	return candidates[candidates.size() - 1]
 
+## Calculates weighted entropy for a WFC cell so the algorithm can collapse the most constrained cell first.
 func cell_entropy(candidates: Array, weights: Array) -> float:
 	var sum_w := 0.0
 	var sum_w_log_w := 0.0
@@ -1136,6 +1205,7 @@ func cell_entropy(candidates: Array, weights: Array) -> float:
 
 	return log(sum_w) - (sum_w_log_w / sum_w)
 
+## Finds the unresolved WFC cell with the fewest/most constrained options, with a tiny random tie-breaker.
 func get_lowest_entropy_cell(wfc_grid: Array, weights: Array, rng: RandomNumberGenerator) -> Vector2i:
 	var best_entropy := 1.0e20
 	var best_cell := Vector2i(-1, -1)
@@ -1156,11 +1226,13 @@ func get_lowest_entropy_cell(wfc_grid: Array, weights: Array, rng: RandomNumberG
 
 	return best_cell
 
+## Collapses a WFC cell to one weighted random pattern.
 func collapse_cell(wfc_grid: Array, cell: Vector2i, weights: Array, rng: RandomNumberGenerator) -> void:
 	var candidates: Array = wfc_grid[cell.y][cell.x]
 	var chosen := weighted_random_choice(candidates, weights, rng)
 	wfc_grid[cell.y][cell.x] = [chosen]
 
+## Propagates WFC constraints from a collapsed cell to neighbours, failing if any cell loses all options.
 func propagate(wfc_grid: Array, adjacency: Dictionary, start_cell: Vector2i) -> bool:
 	var stack = [start_cell]
 
@@ -1210,6 +1282,7 @@ func propagate(wfc_grid: Array, adjacency: Dictionary, start_cell: Vector2i) -> 
 
 	return true
 
+## Runs the WFC collapse loop and restarts if a contradiction occurs.
 func run_wfc(
 	w: int,
 	h: int,
@@ -1257,6 +1330,7 @@ func run_wfc(
 
 	return []
 
+## Computes cells that are meaningful for reverse box movement by expanding outwards from the goals.
 func compute_reachable_cells(layout: Array) -> Dictionary:
 	var reachable = {}
 	# start with all goal tiles
@@ -1299,6 +1373,7 @@ func compute_reachable_cells(layout: Array) -> Dictionary:
 					changed = true
 	return reachable
 
+## Wraps the generated inner layout with a solid wall border.
 func add_border(inner_layout: Array) -> Array:
 	var full_layout: Array = []
 
@@ -1315,6 +1390,7 @@ func add_border(inner_layout: Array) -> Array:
 
 	return full_layout
 
+## Counts non-wall cells in a layout, used to scale goal reachability requirements.
 func count_floor_cells(layout: Array) -> int:
 	var count = 0
 	for y in range(height):
@@ -1323,6 +1399,7 @@ func count_floor_cells(layout: Array) -> int:
 				count += 1
 	return count
 
+## Prevents goals from being placed directly beside one another.
 func has_adjacent_goal(layout: Array, cell: Vector2i) -> bool:
 	for d in dirs:
 		var n = cell + d
@@ -1332,8 +1409,7 @@ func has_adjacent_goal(layout: Array, cell: Vector2i) -> bool:
 			return true
 	return false
 
-
-
+## Scores a possible goal based on reverse reachability, push lanes, nearby space, and corridor penalty.
 func score_goal_cell(layout: Array, cell: Vector2i) -> Dictionary:
 	var temp: Array = layout.duplicate(true)
 	temp[cell.y][cell.x] = 2
@@ -1370,7 +1446,7 @@ func score_goal_cell(layout: Array, cell: Vector2i) -> Dictionary:
 		"corridor": corridor
 	}
 
-
+## Scores a reverse DFS state so the search can return the strongest state found within the search budget.
 func score_state(state: State, goal_cells: Array, layout: Array) -> int:
 	var moved_boxes := 0
 	var total_distance := 0
@@ -1405,6 +1481,7 @@ func score_state(state: State, goal_cells: Array, layout: Array) -> int:
 		pair_penalty * 200
 	)
 
+## Checks whether a layout-local cell is inside the map and not a wall.
 func is_open_layout_cell(layout: Array, cell: Vector2i) -> bool:
 	return (
 		cell.x >= 0 and cell.x < width and
@@ -1412,6 +1489,7 @@ func is_open_layout_cell(layout: Array, cell: Vector2i) -> bool:
 		layout[cell.y][cell.x] != 1
 	)
 
+## Counts directions from which a box can be pushed onto a potential goal cell.
 func count_goal_push_lanes(layout: Array, goal: Vector2i) -> int:
 	var count: int = 0
 
@@ -1424,7 +1502,7 @@ func count_goal_push_lanes(layout: Array, goal: Vector2i) -> int:
 
 	return count
 
-
+## Counts open orthogonal neighbours around a cell.
 func count_open_neighbors4(layout: Array, cell: Vector2i) -> int:
 	var count: int = 0
 
@@ -1435,7 +1513,7 @@ func count_open_neighbors4(layout: Array, cell: Vector2i) -> int:
 
 	return count
 
-
+## Counts open cells in the 3x3 area around a cell to estimate local manoeuvring space.
 func count_open_tiles_3x3(layout: Array, cell: Vector2i) -> int:
 	var count: int = 0
 
@@ -1447,7 +1525,7 @@ func count_open_tiles_3x3(layout: Array, cell: Vector2i) -> int:
 
 	return count
 
-
+## Detects simple 1 tile wide corridor cells, which usually make poor goal positions.
 func is_straight_corridor_cell(layout: Array, cell: Vector2i) -> bool:
 	var left_open: bool = is_open_layout_cell(layout, cell + Vector2i(-1, 0))
 	var right_open: bool = is_open_layout_cell(layout, cell + Vector2i(1, 0))
@@ -1459,7 +1537,7 @@ func is_straight_corridor_cell(layout: Array, cell: Vector2i) -> bool:
 
 	return horizontal_corridor or vertical_corridor
 
-
+## Keeps goals a minimum Manhattan distance apart to avoid goal clusters.
 func goal_has_spacing(placed_goals: Array, cell: Vector2i, min_dist: int = 3) -> bool:
 	for existing in placed_goals:
 		var goal_cell: Vector2i = existing
@@ -1469,9 +1547,11 @@ func goal_has_spacing(placed_goals: Array, cell: Vector2i, min_dist: int = 3) ->
 
 	return true
 
+## Convenience wrapper for checking whether a potential goal has at least one push lane.
 func has_goal_push_lane(layout: Array, goal: Vector2i) -> bool:
 	return count_goal_push_lanes(layout, goal) > 0
 
+## Applies the hard filters used before scoring a goal candidate.
 func is_valid_goal_cell(layout: Array, cell: Vector2i) -> bool:
 	if layout[cell.y][cell.x] != 0:
 		return false
@@ -1499,6 +1579,7 @@ func is_valid_goal_cell(layout: Array, cell: Vector2i) -> bool:
 
 	return true
 
+## Counts possible box moves from a box cell without considering whether the player can reach the support cell.
 func count_box_pushes(layout: Array, box_cell: Vector2i, boxes: Array, ignore_idx: int = -1) -> int:
 	var count := 0
 
@@ -1525,11 +1606,11 @@ func count_box_pushes(layout: Array, box_cell: Vector2i, boxes: Array, ignore_id
 
 	return count
 
-
+## Checks whether a box has at least one possible movement direction in the current layout snapshot.
 func has_good_box_mobility(layout: Array, box_cell: Vector2i, boxes: Array, ignore_idx: int = -1) -> bool:
 	return count_box_pushes(layout, box_cell, boxes, ignore_idx) >= 1
 
-
+## Treats out of bounds cells, walls, and occupied box cells as blocked for lock detection.
 func is_blocked_cell(layout: Array, cell: Vector2i, boxes: Array, box_lookup: Dictionary = {}) -> bool:
 	if not in_bounds(cell):
 		return true
@@ -1539,7 +1620,7 @@ func is_blocked_cell(layout: Array, cell: Vector2i, boxes: Array, box_lookup: Di
 		return true
 	return false
 
-
+## Detects fully blocked 2x2 patterns with multiple boxes, a common Sokoban deadlock shape.
 func creates_2x2_lock(layout: Array, boxes: Array, moved_box: Vector2i, box_lookup: Dictionary = {}) -> bool:
 	var offsets = [
 		Vector2i(0, 0),
@@ -1573,7 +1654,7 @@ func creates_2x2_lock(layout: Array, boxes: Array, moved_box: Vector2i, box_look
 
 	return false
 
-
+## Counts boxes near the border so the DFS scoring can penalise risky edge-heavy states.
 func count_edge_boxes(boxes: Array) -> int:
 	var total := 0
 
@@ -1583,7 +1664,7 @@ func count_edge_boxes(boxes: Array) -> int:
 
 	return total
 
-
+## Counts adjacent box pairs so clustered boxes can be penalised during scoring.
 func count_adjacent_box_pairs(boxes: Array) -> int:
 	var total := 0
 
@@ -1597,7 +1678,7 @@ func count_adjacent_box_pairs(boxes: Array) -> int:
 
 	return total
 
-
+## Counts raw movement options across all boxes in a snapshot.
 func total_box_mobility(layout: Array, boxes: Array) -> int:
 	var total := 0
 
@@ -1606,6 +1687,7 @@ func total_box_mobility(layout: Array, boxes: Array) -> int:
 
 	return total
 
+## Counts pushes for one box where the required player support cell is actually reachable.
 func count_reachable_pushes_for_box(
 	layout: Array,
 	box_cell: Vector2i,
@@ -1642,7 +1724,7 @@ func count_reachable_pushes_for_box(
 
 	return count
 
-
+## Checks whether one box still has at least one reachable legal push.
 func has_reachable_box_push(
 	layout: Array,
 	box_cell: Vector2i,
@@ -1653,7 +1735,7 @@ func has_reachable_box_push(
 ) -> bool:
 	return count_reachable_pushes_for_box(layout, box_cell, boxes, player_flood, ignore_idx, box_lookup) >= 1
 
-
+## Counts all reachable pushes in a state by flood filling the player area for each box.
 func total_reachable_pushes(layout: Array, state: State) -> int:
 	var total := 0
 
@@ -1663,6 +1745,7 @@ func total_reachable_pushes(layout: Array, state: State) -> int:
 
 	return total
 
+## Checks whether a layout cell can safely be used as a player spawn.
 func is_open_spawn_cell_layout(layout: Array, cell: Vector2i, boxes: Array, box_lookup: Dictionary = {}) -> bool:
 	if not in_bounds(cell):
 		return false
@@ -1675,7 +1758,7 @@ func is_open_spawn_cell_layout(layout: Array, cell: Vector2i, boxes: Array, box_
 
 	return true
 
-
+## Fallback spawn selection used when no better spawn candidate is available.
 func first_open_spawn_cell(layout: Array, boxes: Array, box_lookup: Dictionary = {}) -> Vector2i:
 	for y in range(height):
 		for x in range(width):
@@ -1685,7 +1768,7 @@ func first_open_spawn_cell(layout: Array, boxes: Array, box_lookup: Dictionary =
 
 	return Vector2i(start.x + 1, start.y + 1)
 
-
+## Collects player support cells from which reachable box pushes can be made.
 func collect_reachable_push_positions(
 	layout: Array,
 	boxes: Array,
@@ -1723,7 +1806,7 @@ func collect_reachable_push_positions(
 
 	return found.keys()
 
-
+## Returns Manhattan distance from a cell to the closest target cell.
 func cell_distance_to_nearest_target(cell: Vector2i, targets: Array) -> int:
 	if targets.is_empty():
 		return 999999
@@ -1736,14 +1819,14 @@ func cell_distance_to_nearest_target(cell: Vector2i, targets: Array) -> int:
 
 	return best
 
-
+## Finds the approximate centre of the generated level in TileMap coordinates.
 func level_center_cell() -> Vector2i:
 	return Vector2i(
 		start.x + int(width / 2),
 		start.y + int(height / 2)
 	)
 
-
+## Scores cells inside a reachable component and chooses a spawn near useful push positions.
 func choose_best_spawn_in_component(
 	component_cells: Array,
 	push_positions: Array
@@ -1771,7 +1854,7 @@ func choose_best_spawn_in_component(
 
 	return best_cell
 
-
+## Searches reachable components to find a stronger player spawn than simply using the first open tile.
 func find_best_player_spawn(layout: Array, boxes: Array, fallback_player: Vector2i, box_lookup: Dictionary = {}) -> Vector2i:
 	var lookup: Dictionary = box_lookup if not box_lookup.is_empty() else _make_box_lookup(boxes)
 
@@ -1813,16 +1896,18 @@ func find_best_player_spawn(layout: Array, boxes: Array, fallback_player: Vector
 
 	return best_cell
 
+## Builds a box lookup dictionary from an array of box cells.
 func _make_box_lookup(boxes: Array) -> Dictionary:
 	return State.build_box_lookup(boxes)
 
-
+## Updates a box lookup after moving one box from an old cell to a new cell.
 func _move_box_lookup(box_lookup: Dictionary, old_cell: Vector2i, new_cell: Vector2i) -> Dictionary:
 	var next_lookup: Dictionary = box_lookup.duplicate()
 	next_lookup.erase(old_cell)
 	next_lookup[new_cell] = true
 	return next_lookup
 
+## Chooses a stable representative cell from a flood-filled region.
 func _canonical_cell_from_flood(flood: Dictionary) -> Vector2i:
 	var best := Vector2i(999999, 999999)
 	for cell in flood.keys():
@@ -1830,6 +1915,7 @@ func _canonical_cell_from_flood(flood: Dictionary) -> Vector2i:
 			best = cell
 	return best
 
+## Builds a state key from sorted box positions and a precomputed player flood.
 func _state_key_from_flood(boxes: Array, full_flood: Dictionary) -> String:
 	var sorted := boxes.duplicate()
 	sorted.sort_custom(func(a, b): return str(a) < str(b))
@@ -1841,6 +1927,7 @@ func _state_key_from_flood(boxes: Array, full_flood: Dictionary) -> String:
 		s += str(box)
 	return s
 
+## Checks whether a moved box has a legal follow-up push from a precomputed player flood.
 func _has_push_from_flood(
 	layout: Array,
 	new_box_cell: Vector2i,
@@ -1866,6 +1953,7 @@ func _has_push_from_flood(
  
 	return false
 
+## Shows or hides the loading overlay while generation is running.
 func display_fake_loading_screen(display: bool) -> void:
 	fake_loading_screen.visible = display
 	animated_sprite_2d.visible = display
@@ -1873,26 +1961,28 @@ func display_fake_loading_screen(display: bool) -> void:
 	else: animated_sprite_2d.stop()
 	label.visible = display
 
+## Spawns the credits scene.
 func on_credits_pressed():
 	var credits = credit_scene.instantiate()
 	add_child(credits)
 
+## Retry button handler. Regenerates the same level unless reverse DFS is still running.
 func _on_retry_level_pressed() -> void:
 	if reverse_running:
 		return
 	retry_level()
 
-
+## New Level button handler. Reloads the scene so a new seed and setup are used.
 func _on_new_level_pressed() -> void:
 	if reverse_running:
 		return
 	get_tree().reload_current_scene()
 
-
+## Credits button signal handler.
 func _on_credits_pressed() -> void:
 	on_credits_pressed()
 
-
+## Increases the saved box/goal count within the supported range.
 func _on_increase_goals_pressed() -> void:
 	if reverse_running:
 		return
@@ -1900,7 +1990,7 @@ func _on_increase_goals_pressed() -> void:
 	update_goals_label()
 	save_save_data()
 
-
+## Decreases the saved box/goal count within the supported range.
 func _on_decrease_goals_pressed() -> void:
 	if reverse_running:
 		return
@@ -1908,7 +1998,7 @@ func _on_decrease_goals_pressed() -> void:
 	update_goals_label()
 	save_save_data()
 
-
+## Stores the selected difficulty so the next generated scene uses the matching samples and search limits.
 func _on_difficulties_item_selected(index: int) -> void:
 	save_data.difficulty = difficulties.get_item_id(index)
 	save_save_data()
