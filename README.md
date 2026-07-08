@@ -35,4 +35,17 @@ The project also includes a playable Sokoban prototype where users can generate 
 - Depth-First Search
 - Git
 
-## Project Structure
+
+## Running From Source
+
+### Requirements
+
+- Godot Engine 4+
+
+### Steps
+
+1. Clone this repository.
+2. Open Godot.
+3. Select **Import**.
+4. Choose the `project.godot` file inside this repo.
+
